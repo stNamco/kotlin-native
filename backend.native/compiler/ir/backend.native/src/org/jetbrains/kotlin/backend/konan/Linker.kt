@@ -77,7 +77,7 @@ internal class Linker(val context: Context) {
             val framework = File(context.config.outputFile)
             val dylibName = framework.name.removeSuffix(".framework")
             val dylibRelativePath = when (target.family) {
-                Family.IOS -> dylibName
+                Family.IOS, Family.TVOS -> dylibName
                 Family.OSX -> "Versions/A/$dylibName"
                 else -> error(target)
             }

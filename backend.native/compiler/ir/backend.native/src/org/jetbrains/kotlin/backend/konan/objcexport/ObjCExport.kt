@@ -98,7 +98,7 @@ internal class ObjCExport(val context: Context, symbolTable: SymbolTable) {
     private fun produceFrameworkSpecific(headerLines: List<String>) {
         val framework = File(context.config.outputFile)
         val frameworkContents = when(target.family) {
-            Family.IOS -> framework
+            Family.IOS, Family.TVOS -> framework
             Family.OSX -> framework.child("Versions/A")
             else -> error(target)
         }
@@ -136,9 +136,9 @@ internal class ObjCExport(val context: Context, symbolTable: SymbolTable) {
     }
 
     private fun emitInfoPlist(frameworkContents: File, name: String) {
-        val directory = when {
-            target.family == Family.IOS -> frameworkContents
-            target == KonanTarget.MACOS_X64 -> frameworkContents.child("Resources").also { it.mkdirs() }
+        val directory = when (target.family) {
+            Family.IOS, Family.TVOS -> frameworkContents
+            Family.OSX -> frameworkContents.child("Resources").also { it.mkdirs() }
             else -> error(target)
         }
 
@@ -150,7 +150,7 @@ internal class ObjCExport(val context: Context, symbolTable: SymbolTable) {
             KonanTarget.IOS_ARM32, KonanTarget.IOS_ARM64 -> "iPhoneOS"
             KonanTarget.IOS_X64 -> "iPhoneSimulator"
             KonanTarget.TVOS_ARM64 -> "AppleTVOS"
-            KonanTarget.TVOS_X64 -> ""
+            KonanTarget.TVOS_X64 -> "AppleTVSimulator" // TODO: validate me
             KonanTarget.MACOS_X64 -> "MacOSX"
             else -> error(target)
         }
@@ -196,6 +196,14 @@ internal class ObjCExport(val context: Context, symbolTable: SymbolTable) {
                 |    </array>
 
                 """.trimMargin()
+            Family.TVOS -> """
+                |    <key>MinimumOSVersion</key>
+                |    <string>$minimumOsVersion</string>
+                |    <key>UIDeviceFamily</key>
+                |    <array>
+                |        <integer>3</integer>
+                |    </array> 
+            """.trimMargin()
             Family.OSX -> ""
             else -> error(target)
         })
