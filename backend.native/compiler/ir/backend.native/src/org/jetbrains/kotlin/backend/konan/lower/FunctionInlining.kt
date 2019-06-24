@@ -26,6 +26,7 @@ import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
 import org.jetbrains.kotlin.ir.symbols.IrValueSymbol
 import org.jetbrains.kotlin.ir.symbols.impl.IrReturnableBlockSymbolImpl
 import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.classOrNull
 import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitor
@@ -238,9 +239,9 @@ internal class FunctionInlining(val context: Context) : IrElementTransformerVoid
 
                     val immediateCall = with(expression) {
                         if (function is IrConstructor)
-                            IrConstructorCallImpl.fromSymbolOwner(startOffset, endOffset, type, function.symbol)
+                            IrConstructorCallImpl.fromSymbolOwner(startOffset, endOffset, function.returnType, function.symbol)
                         else
-                            IrCallImpl(startOffset, endOffset, type, functionArgument.symbol)
+                            IrCallImpl(startOffset, endOffset, function.returnType, functionArgument.symbol)
                     }.apply {
                         functionParameters.forEach {
                             val argument =
@@ -249,15 +250,19 @@ internal class FunctionInlining(val context: Context) : IrElementTransformerVoid
                                     else
                                         valueParameters[unboundIndex++].second
                             when (it) {
-                                function.dispatchReceiverParameter -> this.dispatchReceiver = argument
-                                function.extensionReceiverParameter -> this.extensionReceiver = argument
-                                else -> putValueArgument(it.index, argument)
+                                function.dispatchReceiverParameter ->
+                                    this.dispatchReceiver = argument.implicitCastIfNeededTo(function.dispatchReceiverParameter!!.type)
+
+                                function.extensionReceiverParameter ->
+                                    this.extensionReceiver = argument.implicitCastIfNeededTo(function.extensionReceiverParameter!!.type)
+
+                                else -> putValueArgument(it.index, argument.implicitCastIfNeededTo(function.valueParameters[it.index].type))
                             }
                         }
                         assert(unboundIndex == valueParameters.size) { "Not all arguments of <invoke> are used" }
                         for (index in 0 until functionArgument.typeArgumentsCount)
                             putTypeArgument(index, functionArgument.getTypeArgument(index))
-                    }
+                    }.implicitCastIfNeededTo(expression.type)
                     return this@FunctionInlining.visitExpression(super.visitExpression(immediateCall))
                 }
                 if (functionArgument !is IrBlock)
@@ -272,6 +277,13 @@ internal class FunctionInlining(val context: Context) : IrElementTransformerVoid
 
             override fun visitElement(element: IrElement) = element.accept(this, null)
         }
+
+        private fun IrExpression.implicitCastIfNeededTo(type: IrType) =
+                type.classOrNull.let { classifier ->
+                    if (type == this.type || classifier == null)
+                        this
+                    else IrTypeOperatorCallImpl(startOffset, endOffset, type, IrTypeOperator.IMPLICIT_CAST, type, classifier, this)
+                }
 
         private fun isLambdaCall(irCall: IrCall): Boolean {
             val callee = irCall.symbol.owner
