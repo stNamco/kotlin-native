@@ -36,7 +36,9 @@ internal fun moduleValidationCallback(state: ActionState, module: IrModuleFragme
         module.accept(IrValidator(context, validatorConfig), null)
         module.accept(CheckDeclarationParentsVisitor, null)
     } catch (t: Throwable) {
-        throw IllegalStateException("Failed IR validation ${state.beforeOrAfter} ${state.phase}", t)
+        if (validatorConfig.abortOnError)
+            throw IllegalStateException("Failed IR validation ${state.beforeOrAfter} ${state.phase}", t)
+        else context.reportCompilationWarning("[IR VALIDATION] ${state.beforeOrAfter} ${state.phase}: ${t.message}")
     }
 }
 
@@ -51,7 +53,9 @@ internal fun fileValidationCallback(state: ActionState, irFile: IrFile, context:
         irFile.accept(IrValidator(context, validatorConfig), null)
         irFile.accept(CheckDeclarationParentsVisitor, null)
     } catch (t: Throwable) {
-        throw IllegalStateException("Failed IR validation ${state.beforeOrAfter} ${state.phase}", t)
+        if (validatorConfig.abortOnError)
+            throw IllegalStateException("Failed IR validation ${state.beforeOrAfter} ${state.phase}", t)
+        else context.reportCompilationWarning("[IR VALIDATION] ${state.beforeOrAfter} ${state.phase}: ${t.message}")
     }
 }
 
