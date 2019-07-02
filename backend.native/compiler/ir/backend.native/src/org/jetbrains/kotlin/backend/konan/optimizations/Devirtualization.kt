@@ -517,25 +517,6 @@ internal object Devirtualization {
 
             topologicalOrder.forEachIndexed { index, multiNode -> multiNode.nodes.forEach { it.priority = index } }
 
-            // Handle all 'right-directed' edges.
-            // TODO: this is pessimistic handling of [DataFlowIR.Type.Virtual], think how to do it better.
-            for (multiNode in topologicalOrder) {
-                if (multiNode.nodes.size == 1 && multiNode.nodes.first() is Node.Source)
-                    continue // A source has no incoming edges.
-                val types = BitSet()
-                for (node in multiNode.nodes) {
-                    node.reversedEdges?.forEach { types.or(it.types) }
-                    node.reversedCastEdges
-                            ?.filter { it.node.priority < node.priority } // Doesn't contradict topological order.
-                            ?.forEach {
-                                val sourceTypes = it.node.types.copy()
-                                sourceTypes.and(it.suitableTypes)
-                                types.or(sourceTypes)
-                            }
-                }
-                for (node in multiNode.nodes)
-                    node.types.or(types)
-            }
             val badEdges = mutableListOf<Pair<Node, Node.CastEdge>>()
             for (node in constraintGraph.nodes) {
                 node.directCastEdges
@@ -545,19 +526,24 @@ internal object Devirtualization {
             badEdges.sortBy { it.second.node.priority } // Heuristic.
 
             do {
-                fun propagateTypes(node: Node, types: BitSet) {
-                    node.types.or(types)
-                    node.directEdges?.forEach { edge ->
-                        val missingTypes = types.copy().apply { andNot(edge.types) }
-                        if (!missingTypes.isEmpty)
-                            propagateTypes(edge, missingTypes)
+                // Handle all 'right-directed' edges.
+                // TODO: this is pessimistic handling of [DataFlowIR.Type.Virtual], think how to do it better.
+                for (multiNode in topologicalOrder) {
+                    if (multiNode.nodes.size == 1 && multiNode.nodes.first() is Node.Source)
+                        continue // A source has no incoming edges.
+                    val types = BitSet()
+                    for (node in multiNode.nodes) {
+                        node.reversedEdges?.forEach { types.or(it.types) }
+                        node.reversedCastEdges
+                                ?.filter { it.node.priority < node.priority } // Doesn't contradict topological order.
+                                ?.forEach {
+                                    val sourceTypes = it.node.types.copy()
+                                    sourceTypes.and(it.suitableTypes)
+                                    types.or(sourceTypes)
+                                }
                     }
-                    node.directCastEdges?.forEach { castEdge ->
-                        val missingTypes = types.copy().apply { andNot(castEdge.node.types) }
-                        missingTypes.and(castEdge.suitableTypes)
-                        if (!missingTypes.isEmpty)
-                            propagateTypes(castEdge.node, missingTypes)
-                    }
+                    for (node in multiNode.nodes)
+                        node.types.or(types)
                 }
 
                 var end = true
@@ -567,7 +553,7 @@ internal object Devirtualization {
                     missingTypes.and(edge.suitableTypes)
                     if (!missingTypes.isEmpty) {
                         end = false
-                        propagateTypes(distNode, missingTypes)
+                        distNode.types.or(missingTypes)
                     }
                 }
             } while (!end)
