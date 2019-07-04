@@ -16,7 +16,7 @@ private fun makeKonanFileLoweringPhase(
         name: String,
         description: String,
         prerequisite: Set<AnyNamedPhase> = emptySet()
-) = makeIrFilePhase(lowering, name, description, prerequisite, actions = setOf(defaultDumper, ::fileValidationCallback))
+) = makeIrFilePhase(lowering, name, description, prerequisite/*, actions = setOf(defaultDumper, ::fileValidationCallback)*/)
 
 private fun makeKonanModuleLoweringPhase(
         lowering: (Context) -> FileLoweringPass,
