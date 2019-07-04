@@ -436,6 +436,8 @@ internal class Context(config: KonanConfig) : KonanBackendContext(config) {
     fun shouldProfilePhases() = config.phaseConfig.needProfiling
 
     fun shouldContainDebugInfo() = config.debug
+    fun shouldContainLocationDebugInfo() = shouldContainDebugInfo() || config.lightDebug
+    fun shouldContainSomeDebugInfo() = shouldContainDebugInfo() || shouldContainLocationDebugInfo()
 
     fun shouldOptimize() = config.configuration.getBoolean(KonanConfigKeys.OPTIMIZATION)
 
