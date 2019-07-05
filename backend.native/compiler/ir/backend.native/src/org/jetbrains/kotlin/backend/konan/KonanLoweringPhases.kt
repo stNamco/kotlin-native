@@ -11,19 +11,23 @@ import org.jetbrains.kotlin.backend.konan.lower.loops.ForLoopsLowering
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 
+private val validateAll = false
+private val filePhaseActions = if (validateAll) setOf(defaultDumper, ::fileValidationCallback) else setOf(defaultDumper)
+private val modulePhaseActions = if (validateAll) setOf(defaultDumper, ::moduleValidationCallback) else setOf(defaultDumper)
+
 private fun makeKonanFileLoweringPhase(
         lowering: (Context) -> FileLoweringPass,
         name: String,
         description: String,
         prerequisite: Set<AnyNamedPhase> = emptySet()
-) = makeIrFilePhase(lowering, name, description, prerequisite/*, actions = setOf(defaultDumper, ::fileValidationCallback)*/)
+) = makeIrFilePhase(lowering, name, description, prerequisite, actions = filePhaseActions)
 
 private fun makeKonanModuleLoweringPhase(
         lowering: (Context) -> FileLoweringPass,
         name: String,
         description: String,
         prerequisite: Set<AnyNamedPhase> = emptySet()
-) = makeIrModulePhase(lowering, name, description, prerequisite/*, actions = setOf(defaultDumper, ::moduleValidationCallback)*/)
+) = makeIrModulePhase(lowering, name, description, prerequisite, actions = modulePhaseActions)
 
 internal fun makeKonanFileOpPhase(
         op: (Context, IrFile) -> Unit,
@@ -38,7 +42,7 @@ internal fun makeKonanFileOpPhase(
                 return input
             }
         },
-        actions = setOf(defaultDumper, ::fileValidationCallback)
+        actions = filePhaseActions
 )
 
 internal fun makeKonanModuleOpPhase(
@@ -80,8 +84,8 @@ internal val inlinePhase = namedIrModulePhase(
         name = "Inline",
         description = "Functions inlining",
         prerequisite = setOf(lowerBeforeInlinePhase),
-        nlevels = 0/*,
-        actions = setOf(defaultDumper, ::moduleValidationCallback)*/
+        nlevels = 0,
+        actions = modulePhaseActions
 )
 
 internal val lowerAfterInlinePhase = makeKonanModuleOpPhase(
@@ -91,8 +95,8 @@ internal val lowerAfterInlinePhase = makeKonanModuleOpPhase(
             irModule.files.forEach(ContractsDslRemover(context)::lower)
         },
         name = "LowerAfterInline",
-        description = "Special operations processing after inlining"/*,
-        actions = setOf(defaultDumper, ::moduleValidationCallback)*/
+        description = "Special operations processing after inlining",
+        actions = modulePhaseActions
 )
 
 internal val interopPart1Phase = makeKonanModuleLoweringPhase(
