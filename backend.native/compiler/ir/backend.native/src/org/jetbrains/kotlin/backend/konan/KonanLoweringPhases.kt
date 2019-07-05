@@ -49,8 +49,7 @@ internal fun makeKonanModuleOpPhase(
         op: (Context, IrModuleFragment) -> Unit,
         name: String,
         description: String,
-        prerequisite: Set<AnyNamedPhase> = emptySet(),
-        actions: Set<Action<IrModuleFragment, Context>> = setOf(defaultDumper)
+        prerequisite: Set<AnyNamedPhase> = emptySet()
 ) = namedIrModulePhase(
         name, description, prerequisite, nlevels = 0,
         lower = object : SameTypeCompilerPhase<Context, IrModuleFragment> {
@@ -59,7 +58,7 @@ internal fun makeKonanModuleOpPhase(
                 return input
             }
         },
-        actions = actions
+        actions = modulePhaseActions
 )
 
 internal val removeExpectDeclarationsPhase = makeKonanModuleLoweringPhase(
@@ -95,8 +94,7 @@ internal val lowerAfterInlinePhase = makeKonanModuleOpPhase(
             irModule.files.forEach(ContractsDslRemover(context)::lower)
         },
         name = "LowerAfterInline",
-        description = "Special operations processing after inlining",
-        actions = modulePhaseActions
+        description = "Special operations processing after inlining"
 )
 
 internal val interopPart1Phase = makeKonanModuleLoweringPhase(
