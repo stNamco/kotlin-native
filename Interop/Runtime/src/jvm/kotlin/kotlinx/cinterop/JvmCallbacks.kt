@@ -17,6 +17,7 @@
 package kotlinx.cinterop
 
 import java.util.concurrent.ConcurrentHashMap
+import java.util.function.LongConsumer
 import kotlin.reflect.KClass
 import kotlin.reflect.KFunction
 import kotlin.reflect.KType
@@ -97,6 +98,7 @@ private fun getStructCType(structClass: KClass<*>): CType<*> = structTypeCache.c
         }
     }
 
+    @Suppress("DEPRECATION")
     val structType = structClass.companionObjectInstance as CVariable.Type
 
     Struct(structType.size, structType.align, fieldCTypes)
@@ -137,7 +139,7 @@ private fun getArgOrRetValCType(type: KType): CType<*> {
         CPointer::class -> Pointer
         // TODO: floats
         CValue::class -> getStructValueCType(type)
-        else -> if (classifier.isSubclassOf(CEnum::class)) {
+        else -> if (classifier.isSubclassOf(@Suppress("DEPRECATION") CEnum::class)) {
             getEnumCType(classifier)
         } else {
             null
@@ -275,8 +277,18 @@ private inline fun ffiClosureImpl(
         returnType: CType<Any?>,
         crossinline invoke: (args: CArrayPointer<COpaquePointerVar>) -> Any?
 ): FfiClosureImpl {
-    return { ret, args ->
+    // Called through [ffi_fun] when a native function created with [ffiCreateClosure] is invoked.
+    return LongConsumer {  retAndArgsRaw ->
+        val retAndArgs = retAndArgsRaw.toCPointer<CPointerVar<*>>()!!
+
+        // Pointer to memory to be filled with return value of the invoked native function:
+        val ret = retAndArgs[0]!!
+
+        // Pointer to array of pointers to arguments passed to the invoked native function:
+        val args = retAndArgs[1]!!.reinterpret<COpaquePointerVar>()
+
         val result = invoke(args)
+
         returnType.write(ret.rawValue, result)
     }
 }
@@ -346,6 +358,7 @@ private class Struct(val size: Long, val align: Int, elementTypes: List<CType<*>
     override fun write(location: NativePtr, value: CValue<*>) = value.write(location)
 }
 
+@Suppress("DEPRECATION")
 private class CEnumType(private val rawValueCType: CType<Any>) : CType<CEnum>(rawValueCType.ffiType) {
 
     override fun read(location: NativePtr): CEnum {
@@ -357,14 +370,10 @@ private class CEnumType(private val rawValueCType: CType<Any>) : CType<CEnum>(ra
     }
 }
 
-private typealias FfiClosureImpl = (ret: COpaquePointer, args: CArrayPointer<COpaquePointerVar>)->Unit
+private typealias FfiClosureImpl = LongConsumer
 private typealias UserData = FfiClosureImpl
 
-private fun loadCallbacksLibrary() {
-    System.loadLibrary("callbacks")
-}
-
-private val topLevelInitializer = loadCallbacksLibrary()
+private val topLevelInitializer = loadKonanLibrary("callbacks")
 
 
 /**
@@ -429,29 +438,10 @@ private fun ffiCreateCif(returnType: ffi_type, paramTypes: List<ffi_type>): ffi_
     return interpretPointed(res)
 }
 
-@Suppress("UNUSED_PARAMETER", "UNUSED")
-private fun ffiFunImpl0(ffiCif: Long, ret: Long, args: Long, userData: Any) {
-    @Suppress("UNCHECKED_CAST")
-    ffiFunImpl(interpretCPointer(ret)!!,
-            interpretCPointer(args)!!,
-            userData as UserData)
-}
-
-/**
- * This function is called from native code when a native function created with [ffiCreateClosure] is invoked.
- *
- * @param ret pointer to memory to be filled with return value of the invoked native function
- * @param args pointer to array of pointers to arguments passed to the invoked native function
- */
-private fun ffiFunImpl(ret: COpaquePointer, args: CArrayPointer<COpaquePointerVar>, userData: UserData) {
-
-    userData.invoke(ret, args)
-}
-
 private external fun ffiCreateClosure0(ffiCif: Long, userData: Any): Long
 
 /**
- * Uses libffi to allocate a native function which will call [ffiFunImpl] when invoked.
+ * Uses libffi to allocate a native function which will call [impl] when invoked.
  *
  * @param ffiCif describes the type of the function to create
  */

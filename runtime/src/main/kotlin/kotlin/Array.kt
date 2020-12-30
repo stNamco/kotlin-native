@@ -7,7 +7,6 @@ package kotlin
 
 import kotlin.native.internal.ExportForCompiler
 import kotlin.native.internal.ExportTypeInfo
-import kotlin.native.internal.InlineConstructor
 import kotlin.native.internal.PointsTo
 
 /**
@@ -21,9 +20,11 @@ public final class Array<T> {
 
     /**
      * Creates a new array with the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     @Suppress("TYPE_PARAMETER_AS_REIFIED")
     public constructor(size: Int, init: (Int) -> T): this(size) {
         var index = 0
@@ -53,7 +54,7 @@ public final class Array<T> {
      * If the [index] is out of bounds of this array, throws an [IndexOutOfBoundsException].
      */
     @SymbolName("Kotlin_Array_get")
-    @PointsTo(0b0100, 0, 0b0001) // <this> points to <return>, <return> points to <this>.
+    @PointsTo(0x000, 0x000, 0x002) // ret -> this.intestines
     external public operator fun get(index: Int): T
 
     /**
@@ -66,7 +67,7 @@ public final class Array<T> {
      * If the [index] is out of bounds of this array, throws an [IndexOutOfBoundsException].
      */
     @SymbolName("Kotlin_Array_set")
-    @PointsTo(0b0100, 0, 0b0001) // <this> points to <value>, <value> points to <this>.
+    @PointsTo(0x300, 0x000, 0x000) // this.intestines -> value
     external public operator fun set(index: Int, value: T): Unit
 
     /**

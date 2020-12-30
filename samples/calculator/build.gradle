@@ -5,11 +5,14 @@ buildscript {
         mavenCentral()
         maven { url 'https://dl.bintray.com/kotlin/kotlin-dev' }
         maven { url 'https://dl.bintray.com/kotlin/kotlin-eap' }
+        if (project.hasProperty("kotlinCompilerRepo")) {
+            maven { setUrl(project.property("kotlinCompilerRepo")) }
+        }
     }
 
     dependencies {
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        classpath 'com.android.tools.build:gradle:3.2.1'
+        classpath 'com.android.tools.build:gradle:3.5.0'
     }
 }
 
@@ -20,5 +23,8 @@ allprojects {
         mavenCentral()
         maven { url 'https://dl.bintray.com/kotlin/kotlin-dev' }
         maven { url 'https://dl.bintray.com/kotlin/kotlin-eap' }
+        if (project.hasProperty("kotlinCompilerRepo")) {
+            maven { setUrl(project.property("kotlinCompilerRepo")) }
+        }
     }
 }

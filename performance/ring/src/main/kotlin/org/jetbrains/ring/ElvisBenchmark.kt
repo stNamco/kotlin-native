@@ -16,6 +16,9 @@
 
 package org.jetbrains.ring
 
+import org.jetbrains.benchmarksLauncher.Blackhole
+import org.jetbrains.benchmarksLauncher.Random
+
 open class ElvisBenchmark {
 
     class Value(var value: Int)
@@ -33,5 +36,18 @@ open class ElvisBenchmark {
         for (obj in array) {
             Blackhole.consume(obj?.value ?: 0)
         }
+    }
+
+    class Composite(val x : Int, val y : Composite?)
+
+    fun check(a : Composite?) : Int {
+        return a?.y?.x ?: (a?.x ?: 3)
+    }
+
+    fun testCompositeElvis(): Int {
+        var result = 0
+        for (i in 0..BENCHMARK_SIZE)
+            result += check(Composite(Random.nextInt(), Composite(Random.nextInt(), null)))
+        return result
     }
 }

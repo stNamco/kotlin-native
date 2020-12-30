@@ -17,6 +17,7 @@
 package org.jetbrains.kotlin.gradle.plugin.test
 
 import org.gradle.testkit.runner.TaskOutcome
+import org.jetbrains.kotlin.konan.target.Distribution
 import org.jetbrains.kotlin.konan.target.PlatformManager
 
 class PathSpecification extends BaseKonanSpecification {
@@ -25,7 +26,7 @@ class PathSpecification extends BaseKonanSpecification {
         project.konanBuildDir.toPath().resolve(path).toFile().exists()
     }
 
-    def platformManager = new PlatformManager()
+    def platformManager = new PlatformManager(new Distribution(KonanProject.konanHome, false, null), false)
 
     def 'Plugin should provide a correct path to the artifacts created'() {
         expect:

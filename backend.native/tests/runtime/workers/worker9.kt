@@ -29,7 +29,7 @@ fun withLock(op: () -> Unit) {
 @Test fun runTest2() {
     val worker = Worker.start()
     val future = worker.execute(TransferMode.SAFE, {}) {
-        val me = Worker.current!!
+        val me = Worker.current
         var x = 1
         me.executeAfter (20000) {
             println("second ${++x}")
@@ -58,5 +58,27 @@ fun withLock(op: () -> Unit) {
         println("frozen OK")
     }.freeze())
 
+    worker.requestTermination().result
+}
+
+class Node(var node: Node?, var outher: Node?)
+
+fun makeCyclic(): Node {
+    val inner = Node(null, null)
+    inner.node = inner
+    val outer = Node(null, null)
+    inner.outher = outer
+    return outer
+}
+
+@Test fun runTest4() {
+    val worker = Worker.start()
+
+    val future = worker.execute(TransferMode.SAFE, { }) {
+        makeCyclic().also {
+            kotlin.native.internal.GC.collect()
+        }
+    }
+    assert(future.result != null)
     worker.requestTermination().result
 }

@@ -10,9 +10,9 @@ package kotlin
 
 import kotlin.internal.PureReifiable
 import kotlin.native.internal.ExportTypeInfo
-import kotlin.native.internal.InlineConstructor
 import kotlin.native.internal.IntrinsicType
 import kotlin.native.internal.TypedIntrinsic
+import kotlin.native.internal.PointsTo
 
 /**
  * An array of bytes.
@@ -25,9 +25,11 @@ public final class ByteArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Byte): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -86,9 +88,11 @@ public final class CharArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Char): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -148,9 +152,11 @@ public final class ShortArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Short): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -210,9 +216,11 @@ public final class IntArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Int): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -272,9 +280,11 @@ public final class LongArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Long): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -334,9 +344,11 @@ public final class FloatArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Float): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -392,9 +404,11 @@ public final class DoubleArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Double): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -450,9 +464,11 @@ public final class BooleanArray {
 
     /**
      * Creates a new array of the specified [size], where each element is calculated by calling the specified
-     * [init] function. The [init] function returns an array element given its index.
+     * [init] function.
+     *
+     * The function [init] is called for each array element sequentially starting from the first one.
+     * It should return the value for an array element given its index.
      */
-    @InlineConstructor
     public constructor(size: Int, init: (Int) -> Boolean): this(size) {
         for (i in 0..size - 1) {
             this[i] = init(i)
@@ -512,6 +528,7 @@ public inline fun <reified @PureReifiable T> arrayOfNulls(size: Int): Array<T?> 
  * Returns an array containing the specified elements.
  */
 @TypedIntrinsic(IntrinsicType.IDENTITY)
+@PointsTo(0x00, 0x01) // ret -> elements
 public external inline fun <reified @PureReifiable T> arrayOf(vararg elements: T): Array<T>
 
 @SymbolName("Kotlin_emptyArray")

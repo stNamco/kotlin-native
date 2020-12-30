@@ -7,12 +7,10 @@ package org.jetbrains.kotlin.backend.konan.lower
 
 import org.jetbrains.kotlin.backend.common.lower.*
 import org.jetbrains.kotlin.backend.common.*
-import org.jetbrains.kotlin.backend.common.descriptors.WrappedSimpleFunctionDescriptor
-import org.jetbrains.kotlin.backend.common.descriptors.WrappedVariableDescriptor
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.descriptors.Modality
-import org.jetbrains.kotlin.descriptors.SimpleFunctionDescriptor
-import org.jetbrains.kotlin.descriptors.Visibilities
+import org.jetbrains.kotlin.descriptors.DescriptorVisibilities
+import org.jetbrains.kotlin.descriptors.FunctionDescriptor
 import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.builders.*
@@ -173,24 +171,6 @@ internal class FinallyBlocksLowering(val context: Context): FileLoweringPass, Ir
             else -> error("Unknown ReturnTarget: $this")
         }
 
-    private fun createSyntheticFunctionDescriptor(name: String): SimpleFunctionDescriptor {
-        val descriptor = WrappedSimpleFunctionDescriptor()
-        descriptor.bind(IrFunctionImpl(
-                SYNTHETIC_OFFSET, SYNTHETIC_OFFSET,
-                IrDeclarationOrigin.DEFINED,
-                IrSimpleFunctionSymbolImpl(descriptor),
-                Name.identifier(name),
-                Visibilities.PUBLIC,
-                Modality.FINAL,
-                context.irBuiltIns.unitType,
-                false,
-                false,
-                false,
-                false)
-        )
-        return descriptor
-    }
-
     private fun performHighLevelJump(tryScopes: List<TryScope>,
                                      index: Int,
                                      jump: HighLevelJump,
@@ -203,7 +183,7 @@ internal class FinallyBlocksLowering(val context: Context): FileLoweringPass, Ir
         val currentTryScope = tryScopes[index]
         currentTryScope.jumps.getOrPut(jump) {
             val type = (jump as? Return)?.target?.owner?.returnType ?: value.type
-            val symbol = IrReturnableBlockSymbolImpl(createSyntheticFunctionDescriptor("\$Finally$index"))
+            val symbol = IrReturnableBlockSymbolImpl()
             with(currentTryScope) {
                 irBuilder.run {
                     val inlinedFinally = irInlineFinally(symbol, type, expression, finallyExpression)
@@ -242,21 +222,19 @@ internal class FinallyBlocksLowering(val context: Context): FileLoweringPass, Ir
                     type        = context.irBuiltIns.nothingType
             )
             val transformedFinallyExpression = finallyExpression.transform(transformer, null)
-            val catchParameter = WrappedVariableDescriptor().let {
+            val catchParameter =
                 IrVariableImpl(
                         startOffset, endOffset,
                         IrDeclarationOrigin.CATCH_PARAMETER,
-                        IrVariableSymbolImpl(it),
+                        IrVariableSymbolImpl(),
                         Name.identifier("t"),
                         symbols.throwable.owner.defaultType,
                         isVar = false,
                         isConst = false,
                         isLateinit = false
                 ).apply {
-                    it.bind(this)
                     parent = this@run.parent
                 }
-            }
 
             val syntheticTry = IrTryImpl(
                     startOffset       = startOffset,
@@ -264,17 +242,16 @@ internal class FinallyBlocksLowering(val context: Context): FileLoweringPass, Ir
                     type              = context.irBuiltIns.nothingType,
                     tryResult         = transformedTry,
                     catches           = listOf(
-                            irCatch(catchParameter).apply {
-                                result = irBlock {
-                                    +copy(finallyExpression)
-                                    +irThrow(irGet(catchParameter))
-                                }
-                            }),
+                            irCatch(catchParameter, irBlock {
+                                +copy(finallyExpression)
+                                +irThrow(irGet(catchParameter))
+                            })
+                    ),
                     finallyExpression = null
             )
             using(TryScope(syntheticTry, transformedFinallyExpression, this)) {
                 val fallThroughType = aTry.type
-                val fallThroughSymbol = IrReturnableBlockSymbolImpl(createSyntheticFunctionDescriptor("\$Fallthrough"))
+                val fallThroughSymbol = IrReturnableBlockSymbolImpl()
                 val transformedResult = aTry.tryResult.transform(transformer, null)
                 transformedTry.tryResult = irReturn(fallThroughSymbol, transformedResult)
                 for (aCatch in aTry.catches) {

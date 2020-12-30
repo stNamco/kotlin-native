@@ -5,27 +5,31 @@
 
 package org.jetbrains.kotlin.backend.konan
 
+import org.jetbrains.kotlin.library.resolver.KotlinLibraryResolveResult
 import org.jetbrains.kotlin.analyzer.AnalysisResult
 import org.jetbrains.kotlin.builtins.KotlinBuiltIns
+import org.jetbrains.kotlin.builtins.functions.functionInterfacePackageFragmentProvider
+import org.jetbrains.kotlin.builtins.konan.KonanBuiltIns
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.container.get
 import org.jetbrains.kotlin.context.ModuleContext
 import org.jetbrains.kotlin.context.MutableModuleContextImpl
 import org.jetbrains.kotlin.context.ProjectContext
+import org.jetbrains.kotlin.descriptors.PackageFragmentProvider
 import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl
-import org.jetbrains.kotlin.descriptors.konan.CurrentKonanModuleOrigin
-import org.jetbrains.kotlin.descriptors.konan.isKonanStdlib
+import org.jetbrains.kotlin.descriptors.konan.CurrentKlibModuleOrigin
+import org.jetbrains.kotlin.descriptors.konan.isNativeStdlib
 import org.jetbrains.kotlin.konan.file.File
-import org.jetbrains.kotlin.konan.library.KonanLibrary
-import org.jetbrains.kotlin.konan.library.resolver.KonanLibraryResolveResult
-import org.jetbrains.kotlin.konan.utils.KonanFactories
-import org.jetbrains.kotlin.konan.utils.KonanFactories.DefaultDescriptorFactory
+import org.jetbrains.kotlin.konan.util.KlibMetadataFactories
+import org.jetbrains.kotlin.library.KotlinLibrary
+import org.jetbrains.kotlin.library.metadata.NativeTypeTransformer
+import org.jetbrains.kotlin.library.metadata.NullFlexibleTypeDeserializer
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.resolve.*
 import org.jetbrains.kotlin.resolve.lazy.declarations.FileBasedDeclarationProviderFactory
-import org.jetbrains.kotlin.serialization.konan.KonanResolvedModuleDescriptors
+import org.jetbrains.kotlin.serialization.konan.KotlinResolvedModuleDescriptors
 import org.jetbrains.kotlin.storage.StorageManager
 
 internal object TopDownAnalyzerFacadeForKonan {
@@ -36,8 +40,8 @@ internal object TopDownAnalyzerFacadeForKonan {
 
         val projectContext = ProjectContext(config.project, "TopDownAnalyzer for Konan")
 
-        val module = DefaultDescriptorFactory.createDescriptorAndNewBuiltIns(
-                moduleName, projectContext.storageManager, origin = CurrentKonanModuleOrigin)
+        val module = NativeFactories.DefaultDescriptorFactory.createDescriptorAndNewBuiltIns(
+                moduleName, projectContext.storageManager, origin = CurrentKlibModuleOrigin)
         val moduleContext = MutableModuleContextImpl(module, projectContext)
 
         val resolvedDependencies = ResolvedDependencies(
@@ -45,24 +49,30 @@ internal object TopDownAnalyzerFacadeForKonan {
                 projectContext.storageManager,
                 module.builtIns,
                 config.languageVersionSettings,
-                config.friendModuleFiles)
+                config.friendModuleFiles,
+                module
+        )
 
-        if (!module.isKonanStdlib()) {
+        val additionalPackages = mutableListOf<PackageFragmentProvider>()
+        if (!module.isNativeStdlib()) {
             val dependencies = listOf(module) + resolvedDependencies.moduleDescriptors.resolvedDescriptors + resolvedDependencies.moduleDescriptors.forwardDeclarationsModule
             module.setDependencies(dependencies, resolvedDependencies.friends)
         } else {
             assert (resolvedDependencies.moduleDescriptors.resolvedDescriptors.isEmpty())
             moduleContext.setDependencies(module)
+            // [K][Suspend]FunctionN belong to stdlib.
+            additionalPackages += functionInterfacePackageFragmentProvider(projectContext.storageManager, module)
         }
 
-        return analyzeFilesWithGivenTrace(files, BindingTraceContext(), moduleContext, context)
+        return analyzeFilesWithGivenTrace(files, BindingTraceContext(), moduleContext, context, additionalPackages)
     }
 
     fun analyzeFilesWithGivenTrace(
             files: Collection<KtFile>,
             trace: BindingTrace,
             moduleContext: ModuleContext,
-            context: Context
+            context: Context,
+            additionalPackages: List<PackageFragmentProvider> = emptyList()
     ): AnalysisResult {
 
         // we print out each file we compile if frontend phase is verbose
@@ -73,7 +83,8 @@ internal object TopDownAnalyzerFacadeForKonan {
         val analyzerForKonan = createTopDownAnalyzerProviderForKonan(
                 moduleContext, trace,
                 FileBasedDeclarationProviderFactory(moduleContext.storageManager, files),
-                context.config.configuration.get(CommonConfigurationKeys.LANGUAGE_VERSION_SETTINGS)!!
+                context.config.configuration.get(CommonConfigurationKeys.LANGUAGE_VERSION_SETTINGS)!!,
+                additionalPackages
         ) {
             initContainer(context.config)
         }.apply {
@@ -93,30 +104,32 @@ internal object TopDownAnalyzerFacadeForKonan {
 }
 
 private class ResolvedDependencies(
-        resolvedLibraries: KonanLibraryResolveResult,
-        storageManager: StorageManager,
-        builtIns: KotlinBuiltIns,
-        specifics: LanguageVersionSettings,
-        friendModuleFiles: Set<File>
+    resolvedLibraries: KotlinLibraryResolveResult,
+    storageManager: StorageManager,
+    builtIns: KotlinBuiltIns,
+    specifics: LanguageVersionSettings,
+    friendModuleFiles: Set<File>,
+    currentModuleDescriptor: ModuleDescriptorImpl
 ) {
 
-    val moduleDescriptors: KonanResolvedModuleDescriptors
+    val moduleDescriptors: KotlinResolvedModuleDescriptors
     val friends: Set<ModuleDescriptorImpl>
 
     init {
 
         val collectedFriends = mutableListOf<ModuleDescriptorImpl>()
 
-        val customAction: (KonanLibrary, ModuleDescriptorImpl) -> Unit = { library, moduleDescriptor ->
+        val customAction: (KotlinLibrary, ModuleDescriptorImpl) -> Unit = { library, moduleDescriptor ->
             if (friendModuleFiles.contains(library.libraryFile)) {
                 collectedFriends.add(moduleDescriptor)
             }
         }
 
-        this.moduleDescriptors = KonanFactories.DefaultResolvedDescriptorsFactory.createResolved(
-                resolvedLibraries, storageManager, builtIns, specifics, customAction)
+        this.moduleDescriptors = NativeFactories.DefaultResolvedDescriptorsFactory.createResolved(
+                resolvedLibraries, storageManager, builtIns, specifics, customAction, listOf(currentModuleDescriptor))
 
         this.friends = collectedFriends.toSet()
     }
 }
 
+val NativeFactories = KlibMetadataFactories(::KonanBuiltIns, NullFlexibleTypeDeserializer, NativeTypeTransformer())

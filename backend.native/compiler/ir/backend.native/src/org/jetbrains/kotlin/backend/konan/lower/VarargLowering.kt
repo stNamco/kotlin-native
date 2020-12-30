@@ -25,10 +25,10 @@ import org.jetbrains.kotlin.backend.konan.KonanBackendContext
 import org.jetbrains.kotlin.builtins.PrimitiveType
 import org.jetbrains.kotlin.builtins.UnsignedType
 import org.jetbrains.kotlin.ir.IrElement
+import org.jetbrains.kotlin.ir.IrStatement
 import org.jetbrains.kotlin.ir.builders.*
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.expressions.*
-import org.jetbrains.kotlin.ir.expressions.impl.IrBlockImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrVarargImpl
 import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
@@ -62,15 +62,21 @@ internal class VarargInjectionLowering constructor(val context: KonanBackendCont
 
     private fun lower(owner: IrSymbol, element: IrElement?) {
         element?.transformChildrenVoid(object: IrElementTransformerVoid() {
+            override fun visitClass(declaration: IrClass): IrStatement {
+                // Skip nested.
+                return declaration
+            }
+
             val transformer = this
 
             private fun replaceEmptyParameterWithEmptyArray(expression: IrFunctionAccessExpression) {
-                log { "call of: ${expression.descriptor}" }
+                val callee = expression.symbol.owner
+                log { "call of: ${callee.fqNameForIrSerialization}" }
                 context.createIrBuilder(owner, expression.startOffset, expression.endOffset).apply {
-                    expression.descriptor.valueParameters.forEach {
-                        log { "varargElementType: ${it.varargElementType} expr: ${ir2string(expression.getValueArgument(it))}" }
+                    callee.valueParameters.forEach {
+                        log { "varargElementType: ${it.varargElementType} expr: ${ir2string(expression.getValueArgument(it.index))}" }
                     }
-                    expression.symbol.owner.valueParameters
+                    callee.valueParameters
                         .filter { it.varargElementType != null && expression.getValueArgument(it.index) == null }
                         .forEach {
                             expression.putValueArgument(
@@ -103,18 +109,19 @@ internal class VarargInjectionLowering constructor(val context: KonanBackendCont
                     val arrayHandle = arrayType(expression.type)
 
                     val vars = expression.elements.map {
-                        it to irTemporaryVar(
+                        it to irTemporary(
                                 (it as? IrSpreadElement)?.expression ?: it as IrExpression,
-                                "elem".synthesizedString
+                                "elem".synthesizedString,
+                                isMutable = true
                         )
                     }.toMap()
                     val arraySize = calculateArraySize(arrayHandle, hasSpreadElement, scope, expression, vars)
                     val array = arrayHandle.createArray(this, expression.varargElementType, arraySize)
 
-                    val arrayTmpVariable = irTemporaryVar(array, "array".synthesizedString)
+                    val arrayTmpVariable = irTemporary(array, "array".synthesizedString, isMutable = true)
                     lateinit var indexTmpVariable: IrVariable
                     if (hasSpreadElement)
-                        indexTmpVariable = irTemporaryVar(kIntZero, "index".synthesizedString)
+                        indexTmpVariable = irTemporary(kIntZero, "index".synthesizedString, isMutable = true)
                     expression.elements.forEachIndexed { i, element ->
                         irBuilder.at(element.startOffset, element.endOffset)
                         log { "element:$i> ${ir2string(element)}" }
@@ -147,7 +154,9 @@ internal class VarargInjectionLowering constructor(val context: KonanBackendCont
     }
 
     private val symbols = context.ir.symbols
-    private val intPlusInt = symbols.intPlusInt.owner
+    private val intPlusInt = symbols.getBinaryOperator(
+            OperatorNameConventions.PLUS, context.irBuiltIns.intType, context.irBuiltIns.intType
+    ).owner
 
     private fun arrayType(type: IrType): ArrayHandle {
         val arrayClass = type.classifierOrFail
@@ -163,7 +172,7 @@ internal class VarargInjectionLowering constructor(val context: KonanBackendCont
     }
 
     private fun IrBuilderWithScope.incrementVariable(variable: IrVariable, value: IrExpression): IrExpression {
-        return irSetVar(variable.symbol, intPlus().apply {
+        return irSet(variable.symbol, intPlus().apply {
             dispatchReceiver = irGet(variable)
             putValueArgument(0, value)
         })

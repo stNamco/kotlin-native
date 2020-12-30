@@ -32,6 +32,8 @@ internal inline fun NativePtr.toNonNull() = this.reinterpret<NativePtr, NonNullN
 inline val nativeNullPtr: NativePtr
     get() = getNativeNullPtr()
 
+@Deprecated("Use sizeOf<T>() or alignOf<T>() instead.")
+@Suppress("DEPRECATION")
 fun <T : CVariable> typeOf(): CVariable.Type = throw Error("typeOf() is called with erased argument")
 
 /**
@@ -55,6 +57,18 @@ external fun NativePointed.getRawPointer(): NativePtr
 external fun CPointer<*>.getRawValue(): NativePtr
 
 internal fun CPointer<*>.cPointerToString() = "CPointer(raw=$rawValue)"
+
+public class Vector128VarOf<T : Vector128>(rawPtr: NativePtr) : CVariable(rawPtr) {
+    @Deprecated("Use sizeOf<T>() or alignOf<T>() instead.")
+    @Suppress("DEPRECATION")
+    companion object : Type(size = 16, align = 16)
+}
+
+public typealias Vector128Var = Vector128VarOf<Vector128>
+
+public var <T : Vector128> Vector128VarOf<T>.value: T
+    get() = nativeMemUtils.getVector(this) as T
+    set(value) = nativeMemUtils.putVector(this, value)
 
 /**
  * Returns a pointer to C function which calls given Kotlin *static* function.

@@ -8,7 +8,7 @@ package codegen.ktype.ktype1
 import kotlin.test.*
 import kotlin.reflect.*
 
-@UseExperimental(ExperimentalStdlibApi::class)
+@OptIn(ExperimentalStdlibApi::class)
 inline fun <reified R> kType() = typeOf<R>()
 
 inline fun <reified R> kType(obj: R) = kType<R>()
@@ -32,7 +32,7 @@ fun testBasics1() {
     assertEquals("$pkg.C<kotlin.Int?>", kType<C<Int?>>().toString())
     assertEquals("$pkg.C<$pkg.C<kotlin.Any>>", kType<C<C<Any>>>().toString())
 
-    assertEquals("$pkg.C<kotlin.Any?>", kTypeForCWithTypeParameter<D>().toString())
+    assertEquals("$pkg.C<T>", kTypeForCWithTypeParameter<D>().toString())
     assertEquals("$pkg.Object", kType<Object>().toString())
     assertEquals("$pkg.Outer.Friend", kType<Outer.Friend>().toString())
 }

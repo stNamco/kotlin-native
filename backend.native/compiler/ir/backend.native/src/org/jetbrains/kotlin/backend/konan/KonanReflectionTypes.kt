@@ -5,7 +5,8 @@
 
 package org.jetbrains.kotlin.backend.konan
 
-import org.jetbrains.kotlin.builtins.KOTLIN_REFLECT_FQ_NAME
+
+import org.jetbrains.kotlin.builtins.StandardNames.KOTLIN_REFLECT_FQ_NAME
 import org.jetbrains.kotlin.descriptors.ClassDescriptor
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
 import org.jetbrains.kotlin.incremental.components.NoLookupLocation
@@ -37,13 +38,18 @@ class KonanReflectionTypes(module: ModuleDescriptor, internalPackage: FqName) {
 
     fun getKFunction(n: Int): ClassDescriptor = find(kotlinReflectScope, "KFunction$n")
 
+    fun getKSuspendFunction(n: Int): ClassDescriptor = find(kotlinReflectScope, "KSuspendFunction$n")
+
     val kProperty0: ClassDescriptor by ClassLookup(kotlinReflectScope)
     val kMutableProperty0: ClassDescriptor by ClassLookup(kotlinReflectScope)
     val kMutableProperty1: ClassDescriptor by ClassLookup(kotlinReflectScope)
     val kMutableProperty2: ClassDescriptor by ClassLookup(kotlinReflectScope)
     val kTypeProjection: ClassDescriptor by ClassLookup(kotlinReflectScope)
+    val kType: ClassDescriptor by ClassLookup(kotlinReflectScope)
+    val kVariance: ClassDescriptor by ClassLookup(kotlinReflectScope)
 
     val kFunctionImpl: ClassDescriptor by ClassLookup(internalScope)
+    val kSuspendFunctionImpl: ClassDescriptor by ClassLookup(internalScope)
     val kProperty0Impl: ClassDescriptor by ClassLookup(internalScope)
     val kProperty1Impl: ClassDescriptor by ClassLookup(internalScope)
     val kProperty2Impl: ClassDescriptor by ClassLookup(internalScope)
@@ -52,4 +58,6 @@ class KonanReflectionTypes(module: ModuleDescriptor, internalPackage: FqName) {
     val kMutableProperty2Impl: ClassDescriptor by ClassLookup(internalScope)
     val kLocalDelegatedPropertyImpl: ClassDescriptor by ClassLookup(internalScope)
     val kLocalDelegatedMutablePropertyImpl: ClassDescriptor by ClassLookup(internalScope)
+
+    val typeOf = kotlinReflectScope.getContributedFunctions(Name.identifier("typeOf"), NoLookupLocation.FROM_REFLECTION).single()
 }

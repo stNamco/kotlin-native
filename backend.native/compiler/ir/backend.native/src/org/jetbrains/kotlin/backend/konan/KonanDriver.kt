@@ -8,6 +8,7 @@ package org.jetbrains.kotlin.backend.konan
 import org.jetbrains.kotlin.backend.common.phaser.CompilerPhase
 import org.jetbrains.kotlin.backend.common.phaser.invokeToplevel
 import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
+import org.jetbrains.kotlin.utils.addToStdlib.cast
 
 fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEnvironment) {
 
@@ -24,6 +25,14 @@ fun runTopLevelPhases(konanConfig: KonanConfig, environment: KotlinCoreEnvironme
 
     if (konanConfig.infoArgsOnly) return
 
-    (toplevelPhase as CompilerPhase<Context, Unit, Unit>).invokeToplevel(context.phaseConfig, context, Unit)
+    try {
+        toplevelPhase.cast<CompilerPhase<Context, Unit, Unit>>().invokeToplevel(context.phaseConfig, context, Unit)
+    } finally {
+        try {
+            context.disposeLlvm()
+        } finally {
+            context.freeNativeMem()
+        }
+    }
 }
 

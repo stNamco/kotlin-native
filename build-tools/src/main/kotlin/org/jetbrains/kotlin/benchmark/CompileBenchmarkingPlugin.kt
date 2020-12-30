@@ -29,6 +29,7 @@ open class CompileBenchmarkExtension @Inject constructor(val project: Project) {
     var applicationName = project.name
     var repeatNumber: Int = 1
     var buildSteps: BuildStepContainer = BuildStepContainer(project)
+    var compilerOpts: List<String> = emptyList()
 
     fun buildSteps(configure: Action<BuildStepContainer>): Unit = buildSteps.let { configure.execute(it) }
     fun buildSteps(configure: Closure<Unit>): Unit = buildSteps(ConfigureUtil.configureUsing(configure))
@@ -69,7 +70,7 @@ open class CompileBenchmarkingPlugin : Plugin<Project> {
                         isIgnoreExitValue = true
                         konanRun.dependsOn(this)
                         doLast {
-                            exitCodes[name] = execResult.exitValue
+                            exitCodes[name] = execResult!!.exitValue
                         }
                     }
                 }
@@ -84,6 +85,7 @@ open class CompileBenchmarkingPlugin : Plugin<Project> {
 
             doLast {
                 val nativeCompileTime = getCompileBenchmarkTime(
+                    project,
                     applicationName,
                     buildSteps.names,
                     repeatNumber,
@@ -94,6 +96,7 @@ open class CompileBenchmarkingPlugin : Plugin<Project> {
                     "type" to "native",
                     "compilerVersion" to konanVersion,
                     "benchmarks" to "[]",
+                    "flags" to getCompilerFlags(benchmarkExtension).sorted(),
                     "compileTime" to nativeCompileTime,
                     "codeSize" to getCodeSizeBenchmark(applicationName, nativeExecutable.absolutePath)
                 )
@@ -104,9 +107,10 @@ open class CompileBenchmarkingPlugin : Plugin<Project> {
         }
     }
 
-    private fun Project.configureJvmRun(
-        benchmarkExtension: CompileBenchmarkExtension
-    ) {
+    private fun getCompilerFlags(benchmarkExtension: CompileBenchmarkExtension) =
+            benchmarkExtension.compilerOpts
+
+    private fun Project.configureJvmRun() {
         val jvmRun = tasks.create("jvmRun") {
             it.group = BenchmarkingPlugin.BENCHMARKING_GROUP
             it.description = "Runs the compile only benchmark for Kotlin/JVM."
@@ -133,7 +137,7 @@ open class CompileBenchmarkingPlugin : Plugin<Project> {
         // Create tasks.
         configureUtilityTasks()
         configureKonanRun(benchmarkExtension)
-        configureJvmRun(benchmarkExtension)
+        configureJvmRun()
     }
 
     companion object {

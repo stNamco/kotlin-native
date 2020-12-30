@@ -7,9 +7,11 @@ package org.jetbrains.kotlin.backend.konan
 import org.jetbrains.kotlin.config.LanguageVersionSettings
 import org.jetbrains.kotlin.container.*
 import org.jetbrains.kotlin.context.ModuleContext
+import org.jetbrains.kotlin.descriptors.PackageFragmentProvider
+import org.jetbrains.kotlin.descriptors.impl.CompositePackageFragmentProvider
 import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl
 import org.jetbrains.kotlin.frontend.di.configureModule
-import org.jetbrains.kotlin.platform.konan.KonanPlatforms
+import org.jetbrains.kotlin.platform.konan.NativePlatforms
 import org.jetbrains.kotlin.resolve.*
 import org.jetbrains.kotlin.resolve.konan.platform.NativePlatformAnalyzerServices
 import org.jetbrains.kotlin.resolve.lazy.KotlinCodeAnalyzer
@@ -22,10 +24,11 @@ fun createTopDownAnalyzerProviderForKonan(
         bindingTrace: BindingTrace,
         declarationProviderFactory: DeclarationProviderFactory,
         languageVersionSettings: LanguageVersionSettings,
+        additionalPackages: List<PackageFragmentProvider>,
         initContainer: StorageComponentContainer.() -> Unit
 ): ComponentProvider {
     return createContainer("TopDownAnalyzerForKonan", NativePlatformAnalyzerServices) {
-        configureModule(moduleContext, KonanPlatforms.defaultKonanPlatform, NativePlatformAnalyzerServices, bindingTrace, languageVersionSettings)
+        configureModule(moduleContext, NativePlatforms.unspecifiedNativePlatform, NativePlatformAnalyzerServices, bindingTrace, languageVersionSettings)
 
         useInstance(declarationProviderFactory)
         useImpl<AnnotationResolverImpl>()
@@ -37,6 +40,9 @@ fun createTopDownAnalyzerProviderForKonan(
 
         initContainer()
     }.apply {
-        get<ModuleDescriptorImpl>().initialize(get<KotlinCodeAnalyzer>().packageFragmentProvider)
+        val packagePartProviders = mutableListOf(get<KotlinCodeAnalyzer>().packageFragmentProvider)
+        val moduleDescriptor = get<ModuleDescriptorImpl>()
+        packagePartProviders += additionalPackages
+        moduleDescriptor.initialize(CompositePackageFragmentProvider(packagePartProviders))
     }
 }

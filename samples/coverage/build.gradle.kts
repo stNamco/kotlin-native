@@ -5,37 +5,40 @@ plugins {
 }
 
 kotlin {
-    sourceSets {
-        val commonMain by getting {
-            dependencies {
-                implementation(kotlin("stdlib-common"))
-            }
-        }
-        val commonTest by getting {
-            dependencies {
-                implementation(kotlin("test-common"))
-                implementation(kotlin("test-annotations-common"))
-            }
-        }
+    // Determine host preset.
+    val hostOs = System.getProperty("os.name")
+    val isMingwX64 = hostOs.startsWith("Windows")
+
+    // Create a target for the host platform.
+    val hostTarget = when {
+        hostOs == "Mac OS X" -> macosX64("coverage")
+        hostOs == "Linux" -> linuxX64("coverage")
+        isMingwX64 -> mingwX64("coverage")
+        else -> throw GradleException("Host OS '$hostOs' is not supported in Kotlin/Native $project.")
     }
 
-    macosX64("macos") {
+    hostTarget.apply {
         binaries {
             executable(listOf(DEBUG))
         }
         binaries.getTest("DEBUG").apply {
-            freeCompilerArgs.add("-Xlibrary-to-cover=${compilations["main"].output.classesDirs.singleFile.absolutePath}")
+            freeCompilerArgs += listOf("-Xlibrary-to-cover=${compilations["main"].output.classesDirs.singleFile.absolutePath}")
         }
+    }
+
+    sourceSets {
+        val coverageMain by getting
+        val coverageTest by getting
     }
 }
 
 tasks.create("createCoverageReport") {
-    dependsOn("macosTest")
+    dependsOn("coverageTest")
 
     description = "Create coverage report"
 
     doLast {
-        val testDebugBinary = kotlin.targets["macos"].let { it as KotlinNativeTarget }.binaries.getExecutable("test", "debug").outputFile
+        val testDebugBinary = kotlin.targets["coverage"].let { it as KotlinNativeTarget }.binaries.getTest("DEBUG").outputFile
         exec {
             commandLine("llvm-profdata", "merge", "$testDebugBinary.profraw", "-o", "$testDebugBinary.profdata")
         }

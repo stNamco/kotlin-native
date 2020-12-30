@@ -16,35 +16,38 @@
 
 package org.jetbrains.ring
 
-import platform.posix.*
+import kotlin.native.concurrent.FreezableAtomicReference as KAtomicRef
+import kotlin.native.concurrent.isFrozen
+import kotlin.native.concurrent.freeze
 
-//-----------------------------------------------------------------------------//
+public actual class AtomicRef<T> constructor(@PublishedApi internal val a: KAtomicRef<T>) {
+    public actual inline var value: T
+        get() = a.value
+        set(value) {
+            if (a.isFrozen) value.freeze()
+            a.value = value
+        }
 
-actual class Blackhole {
-    @kotlin.native.ThreadLocal
-    actual companion object {
-        actual var consumer = 0
-        actual fun consume(value: Any) {
-            consumer += value.hashCode()
+    public actual inline fun lazySet(value: T) {
+        if (a.isFrozen) value.freeze()
+        a.value = value
+    }
+
+    public actual inline fun compareAndSet(expect: T, update: T): Boolean {
+        if (a.isFrozen) update.freeze()
+        return a.compareAndSet(expect, update)
+    }
+
+    public actual fun getAndSet(value: T): T {
+        if (a.isFrozen) value.freeze()
+        while (true) {
+            val cur = a.value
+            if (cur === value) return cur
+            if (a.compareAndSwap(cur, value) === cur) return cur
         }
     }
+
+    override fun toString(): String = value.toString()
 }
 
-//-----------------------------------------------------------------------------//
-
-actual class Random actual constructor() {
-    @kotlin.native.ThreadLocal
-    actual companion object {
-        actual var seedInt = 0
-        actual fun nextInt(boundary: Int): Int {
-            seedInt = (3 * seedInt + 11) % boundary
-            return seedInt
-        }
-
-        actual var seedDouble: Double = 0.1
-        actual fun nextDouble(boundary: Double): Double {
-            seedDouble = (7.0 * seedDouble + 7.0) % boundary
-            return seedDouble
-        }
-    }
-}
+public actual fun <T> atomic(initial: T): AtomicRef<T> = AtomicRef<T>(KAtomicRef(initial))

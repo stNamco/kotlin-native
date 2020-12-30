@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2018 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
+ * Copyright 2010-2019 JetBrains s.r.o. Use of this source code is governed by the Apache 2.0 license
  * that can be found in the LICENSE file.
  */
 
@@ -7,26 +7,28 @@ package org.jetbrains.kotlin.backend.konan.llvm
 
 import kotlinx.cinterop.allocArrayOf
 import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.reinterpret
 import llvm.*
 import org.jetbrains.kotlin.backend.konan.*
-import org.jetbrains.kotlin.builtins.UnsignedTypes
 import org.jetbrains.kotlin.ir.SourceManager.FileEntry
 import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
 import org.jetbrains.kotlin.ir.declarations.IrFunction
+import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.classOrNull
 import org.jetbrains.kotlin.ir.util.SYNTHETIC_OFFSET
-import org.jetbrains.kotlin.js.descriptorUtils.getJetTypeFqName
+import org.jetbrains.kotlin.ir.util.isTypeParameter
+import org.jetbrains.kotlin.ir.util.isUnsigned
+import org.jetbrains.kotlin.ir.util.render
 import org.jetbrains.kotlin.konan.CURRENT
-import org.jetbrains.kotlin.konan.KonanVersion
+import org.jetbrains.kotlin.konan.CompilerVersion
 import org.jetbrains.kotlin.konan.file.File
-import org.jetbrains.kotlin.types.KotlinType
-import org.jetbrains.kotlin.types.TypeUtils
-
+import org.jetbrains.kotlin.utils.addToStdlib.cast
 
 internal object DWARF {
-    val producer                       = "konanc ${KonanVersion.CURRENT} / kotlin-compiler: ${KotlinVersion.CURRENT}"
+    val producer                       = "konanc ${CompilerVersion.CURRENT} / kotlin-compiler: ${KotlinVersion.CURRENT}"
     /* TODO: from LLVM sources is unclear what runtimeVersion corresponds to term in terms of dwarf specification. */
-    val dwarfVersionMetaDataNodeName   = "Dwarf Version".mdString()
-    val dwarfDebugInfoMetaDataNodeName = "Debug Info Version".mdString()
+    val dwarfVersionMetaDataNodeName  get() = "Dwarf Version".mdString()
+    val dwarfDebugInfoMetaDataNodeName get() = "Debug Info Version".mdString()
     const val debugInfoVersion = 3 /* TODO: configurable? */
     /**
      * This is  the value taken from [DIFlags.FlagFwdDecl], to mark type declaration as
@@ -65,24 +67,28 @@ internal class DebugInfo internal constructor(override val context: Context):Con
     val inlinedSubprograms = mutableMapOf<IrFunction, DISubprogramRef>()
     var builder: DIBuilderRef? = null
     var module: DIModuleRef? = null
-    var types = mutableMapOf<KotlinType, DITypeOpaqueRef>()
+    var compilationUnit: DIScopeOpaqueRef? = null
+    var objHeaderPointerType: DITypeOpaqueRef? = null
+    var types = mutableMapOf<IrType, DITypeOpaqueRef>()
 
-    val llvmTypes = mapOf<KotlinType, LLVMTypeRef>(
-            context.builtIns.booleanType to context.llvm.llvmInt8,
-            context.builtIns.byteType    to context.llvm.llvmInt8,
-            context.builtIns.charType    to context.llvm.llvmInt8,
-            context.builtIns.shortType   to context.llvm.llvmInt16,
-            context.builtIns.intType     to context.llvm.llvmInt32,
-            context.builtIns.longType    to context.llvm.llvmInt64,
-            context.builtIns.floatType   to context.llvm.llvmFloat,
-            context.builtIns.doubleType  to context.llvm.llvmDouble)
-    val intTypes = listOf<KotlinType>(context.builtIns.byteType, context.builtIns.shortType, context.builtIns.intType, context.builtIns.longType)
-    val realTypes = listOf<KotlinType>(context.builtIns.floatType, context.builtIns.doubleType)
+    val llvmTypes = mapOf<IrType, LLVMTypeRef>(
+            context.irBuiltIns.booleanType to context.llvm.llvmInt8,
+            context.irBuiltIns.byteType    to context.llvm.llvmInt8,
+            context.irBuiltIns.charType    to context.llvm.llvmInt16,
+            context.irBuiltIns.shortType   to context.llvm.llvmInt16,
+            context.irBuiltIns.intType     to context.llvm.llvmInt32,
+            context.irBuiltIns.longType    to context.llvm.llvmInt64,
+            context.irBuiltIns.floatType   to context.llvm.llvmFloat,
+            context.irBuiltIns.doubleType  to context.llvm.llvmDouble)
     val llvmTypeSizes = llvmTypes.map { it.key to LLVMSizeOfTypeInBits(llvmTargetData, it.value) }.toMap()
     val llvmTypeAlignments = llvmTypes.map {it.key to LLVMPreferredAlignmentOfType(llvmTargetData, it.value)}.toMap()
-    val otherLlvmType = LLVMPointerType(LLVMInt64Type(), 0)!!
+    val otherLlvmType = LLVMPointerType(int64Type, 0)!!
     val otherTypeSize = LLVMSizeOfTypeInBits(llvmTargetData, otherLlvmType)
     val otherTypeAlignment = LLVMPreferredAlignmentOfType(llvmTargetData, otherLlvmType)
+
+    val compilerGeneratedFile by lazy {
+        DICreateFile(builder, "<compiler-generated>", "")!!
+    }
 }
 
 /**
@@ -111,20 +117,28 @@ internal data class FileAndFolder(val file: String, val folder: String) {
     fun path() = if (this == NOFILE) file else "$folder/$file"
 }
 
-internal fun String?.toFileAndFolder():FileAndFolder {
+internal fun String?.toFileAndFolder(context: Context):FileAndFolder {
     this ?: return FileAndFolder.NOFILE
     val file = File(this).absoluteFile
-    return FileAndFolder(file.name, file.parent)
+    var parent = file.parent
+    context.configuration.get(KonanConfigKeys.DEBUG_PREFIX_MAP)?.let { debugPrefixMap ->
+      for ((key, value) in debugPrefixMap) {
+        if (parent.startsWith(key)) {
+          parent = value + parent.removePrefix(key)
+        }
+      }
+    }
+    return FileAndFolder(file.name, parent)
 }
 
 internal fun generateDebugInfoHeader(context: Context) {
-    if (context.shouldContainDebugInfo()) {
+    if (context.shouldContainAnyDebugInfo()) {
         val path = context.config.outputFile
-            .toFileAndFolder()
+            .toFileAndFolder(context)
         @Suppress("UNCHECKED_CAST")
         context.debugInfo.module   = DICreateModule(
                 builder            = context.debugInfo.builder,
-                scope              = context.llvmModule as DIScopeOpaqueRef,
+                scope              = null,
                 name               = path.path(),
                 configurationMacro = "",
                 includePath        = "",
@@ -155,42 +169,38 @@ internal fun generateDebugInfoHeader(context: Context) {
         val llvmModuleFlags = "llvm.module.flags"
         LLVMAddNamedMetadataOperand(context.llvmModule, llvmModuleFlags, dwarfVersion)
         LLVMAddNamedMetadataOperand(context.llvmModule, llvmModuleFlags, nodeDebugInfoVersion)
+        val objHeaderType = DICreateStructType(
+                refBuilder    = context.debugInfo.builder,
+                // TODO: here should be DIFile as scope.
+                scope         = null,
+                name          = "ObjHeader",
+                file          = null,
+                lineNumber    = 0,
+                sizeInBits    = 0,
+                alignInBits   = 0,
+                flags         = DWARF.flagsForwardDeclaration,
+                derivedFrom   = null,
+                elements      = null,
+                elementsCount = 0,
+                refPlace      = null).cast<DITypeOpaqueRef>()
+        context.debugInfo.objHeaderPointerType = dwarfPointerType(context, objHeaderType)
     }
 }
 
 @Suppress("UNCHECKED_CAST")
-internal fun KotlinType.dwarfType(context: Context, targetData: LLVMTargetDataRef): DITypeOpaqueRef {
+internal fun IrType.dwarfType(context: Context, targetData: LLVMTargetDataRef): DITypeOpaqueRef {
     when {
-        this.computePrimitiveBinaryTypeOrNull() != null -> return debugInfoBaseType(context, targetData, this.getJetTypeFqName(false), llvmType(context), encoding(context).value.toInt())
+        this.computePrimitiveBinaryTypeOrNull() != null -> return debugInfoBaseType(context, targetData, this.render(), llvmType(context), encoding().value.toInt())
         else -> {
-            val classDescriptor = TypeUtils.getClassDescriptor(this)
             return when {
-                classDescriptor != null -> {
-                    val type = DICreateStructType(
-                            refBuilder    = context.debugInfo.builder,
-                            // TODO: here should be DIFile as scope.
-                            scope         = null,
-                            name          = "ObjHeader",
-                            file          = null,
-                            lineNumber    = 0,
-                            sizeInBits    = 0,
-                            alignInBits   = 0,
-                            flags         = DWARF.flagsForwardDeclaration,
-                            derivedFrom   = null,
-                            elements      = null,
-                            elementsCount = 0,
-                            refPlace      = null)!! as DITypeOpaqueRef
-                    dwarfPointerType(context, type)
-                }
-                TypeUtils.isTypeParameter(this) -> //TODO: Type parameter,  how to deal with if?
-                    debugInfoBaseType(context, targetData, this.toString(), llvmType(context), encoding(context).value.toInt())
+                classOrNull != null || this.isTypeParameter() -> context.debugInfo.objHeaderPointerType!!
                 else -> TODO("$this: Does this case really exist?")
             }
         }
     }
 }
 
-internal fun KotlinType.diType(context: Context, llvmTargetData: LLVMTargetDataRef): DITypeOpaqueRef =
+internal fun IrType.diType(context: Context, llvmTargetData: LLVMTargetDataRef): DITypeOpaqueRef =
         context.debugInfo.types.getOrPut(this) {
             dwarfType(context, llvmTargetData)
         }
@@ -201,17 +211,17 @@ private fun debugInfoBaseType(context:Context, targetData:LLVMTargetDataRef, typ
         LLVMSizeOfTypeInBits(targetData, type),
         LLVMPreferredAlignmentOfType(targetData, type).toLong(), encoding) as DITypeOpaqueRef
 
-internal val IrFunction.types:List<KotlinType>
+internal val IrFunction.types:List<IrType>
     get() {
-        val parameters = descriptor.valueParameters.map{it.type}
-        return listOf(descriptor.returnType!!, *parameters.toTypedArray())
+        val parameters = valueParameters.map { it.type }
+        return listOf(returnType, *parameters.toTypedArray())
     }
 
-internal fun KotlinType.size(context:Context) = context.debugInfo.llvmTypeSizes.getOrDefault(this, context.debugInfo.otherTypeSize)
+internal fun IrType.size(context:Context) = context.debugInfo.llvmTypeSizes.getOrDefault(this, context.debugInfo.otherTypeSize)
 
-internal fun KotlinType.alignment(context:Context) = context.debugInfo.llvmTypeAlignments.getOrDefault(this, context.debugInfo.otherTypeAlignment).toLong()
+internal fun IrType.alignment(context:Context) = context.debugInfo.llvmTypeAlignments.getOrDefault(this, context.debugInfo.otherTypeAlignment).toLong()
 
-internal fun KotlinType.llvmType(context:Context): LLVMTypeRef = context.debugInfo.llvmTypes.getOrElse(this) {
+internal fun IrType.llvmType(context:Context): LLVMTypeRef = context.debugInfo.llvmTypes.getOrElse(this) {
     when(computePrimitiveBinaryTypeOrNull()) {
         PrimitiveBinaryType.BYTE -> context.llvm.llvmInt8
         PrimitiveBinaryType.SHORT -> context.llvm.llvmInt16
@@ -219,18 +229,19 @@ internal fun KotlinType.llvmType(context:Context): LLVMTypeRef = context.debugIn
         PrimitiveBinaryType.LONG -> context.llvm.llvmInt64
         PrimitiveBinaryType.FLOAT -> context.llvm.llvmFloat
         PrimitiveBinaryType.DOUBLE -> context.llvm.llvmDouble
+        PrimitiveBinaryType.VECTOR128 -> context.llvm.llvmVector128
         else -> context.debugInfo.otherLlvmType
     }
 }
 
-internal fun KotlinType.encoding(context: Context): DwarfTypeKind = when(computePrimitiveBinaryTypeOrNull()) {
+internal fun IrType.encoding(): DwarfTypeKind = when(computePrimitiveBinaryTypeOrNull()) {
     PrimitiveBinaryType.FLOAT -> DwarfTypeKind.DW_ATE_float
     PrimitiveBinaryType.DOUBLE -> DwarfTypeKind.DW_ATE_float
     PrimitiveBinaryType.BOOLEAN -> DwarfTypeKind.DW_ATE_boolean
     PrimitiveBinaryType.POINTER -> DwarfTypeKind.DW_ATE_address
     else -> {
         //TODO: not recursive.
-        if (UnsignedTypes.isUnsignedType(this)) DwarfTypeKind.DW_ATE_unsigned
+        if (this.isUnsigned()) DwarfTypeKind.DW_ATE_unsigned
         else DwarfTypeKind.DW_ATE_signed
     }
 }
@@ -242,7 +253,7 @@ internal fun IrFunction.subroutineType(context: Context, llvmTargetData: LLVMTar
     return subroutineType(context, llvmTargetData, types)
 }
 
-internal fun subroutineType(context: Context, llvmTargetData: LLVMTargetDataRef, types: List<KotlinType>): DISubroutineTypeRef {
+internal fun subroutineType(context: Context, llvmTargetData: LLVMTargetDataRef, types: List<IrType>): DISubroutineTypeRef {
     return memScoped {
         DICreateSubroutineType(context.debugInfo.builder, allocArrayOf(
                 types.map { it.diType(context, llvmTargetData) }),
@@ -253,3 +264,29 @@ internal fun subroutineType(context: Context, llvmTargetData: LLVMTargetDataRef,
 @Suppress("UNCHECKED_CAST")
 private fun dwarfPointerType(context: Context, type: DITypeOpaqueRef) =
         DICreatePointerType(context.debugInfo.builder, type) as DITypeOpaqueRef
+
+internal fun setupBridgeDebugInfo(context: Context, function: LLVMValueRef): LocationInfo? {
+    if (!context.shouldContainLocationDebugInfo()) {
+        return null
+    }
+
+    val file = context.debugInfo.compilerGeneratedFile
+
+    // TODO: can we share the scope among all bridges?
+    val scope: DIScopeOpaqueRef = DICreateFunction(
+            builder = context.debugInfo.builder,
+            scope = file.reinterpret(),
+            name = function.name,
+            linkageName = function.name,
+            file = file,
+            lineNo = 0,
+            type = subroutineType(context, context.llvm.runtime.targetData, emptyList()), // TODO: use proper type.
+            isLocal = 0,
+            isDefinition = 1,
+            scopeLine = 0
+    )!!.also {
+        DIFunctionAddSubprogram(function, it)
+    }.reinterpret()
+
+    return LocationInfo(scope, 1, 0)
+}

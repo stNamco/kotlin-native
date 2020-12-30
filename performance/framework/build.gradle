@@ -1,14 +1,16 @@
 import org.jetbrains.kotlin.MPPTools
 import org.jetbrains.kotlin.PlatformInfo
 import org.jetbrains.kotlin.RunJvmTask
+import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
 
 buildscript {
-    apply from: "$rootProject.projectDir/gradle/kotlinGradlePlugin.gradle"
+    apply from: "$rootProject.projectDir/../gradle/kotlinGradlePlugin.gradle"
 
     repositories {
         maven {
             url 'https://cache-redirector.jetbrains.com/jcenter'
         }
+        jcenter()
     }
 }
 
@@ -18,6 +20,7 @@ repositories {
     maven {
         url 'https://cache-redirector.jetbrains.com/jcenter'
     }
+    jcenter()
     maven {
         url kotlinCompilerRepo
     }
@@ -29,6 +32,8 @@ repositories {
 def toolsPath = '../../tools'
 def frameworkName = 'benchmarksAnalyzer'
 
+def buildType = NativeBuildType.valueOf(findProperty('nativeBuildType') ?: 'DEBUG')
+
 kotlin {
     sourceSets {
         macosMain {
@@ -37,7 +42,8 @@ kotlin {
             }
             kotlin.srcDir "$toolsPath/benchmarks/shared/src"
             kotlin.srcDir "$toolsPath/benchmarksAnalyzer/src/main/kotlin"
-            kotlin.srcDir "$toolsPath/kliopt"
+            kotlin.srcDir "$rootProject.projectDir/../endorsedLibraries/kotlinx.cli/src/main/kotlin"
+            kotlin.srcDir "$rootProject.projectDir/../endorsedLibraries/kotlinx.cli/src/main/kotlin-native"
             kotlin.srcDir "$toolsPath/benchmarksAnalyzer/src/main/kotlin-native"
         }
     }
@@ -51,7 +57,7 @@ kotlin {
     }
 
     macosX64("macos").binaries {
-        framework(frameworkName, [RELEASE])
+        framework(frameworkName, [buildType])
     }
 }
 
@@ -69,19 +75,30 @@ task jvmRun(type: RunJvmTask)  {
     }
 }
 
+def compilerFlags(def buildType) {
+    def result = []
+    if (buildType.optimized) {
+        result.add("-opt")
+    }
+    if (buildType.debuggable) {
+        result.add("-g")
+    }
+    return result
+}
+
 task konanJsonReport {
     doLast {
         if (PlatformInfo.isMac()) {
             def applicationName = "FrameworkBenchmarksAnalyzer"
             def frameworkPath = kotlin.macosX64("macos").binaries.
-                    getFramework(frameworkName, kotlin.macosX64("macos").binaries.RELEASE).outputFile.absolutePath
+                    getFramework(frameworkName, kotlin.macosX64("macos").binaries.DEBUG).outputFile.absolutePath
             def nativeExecutable = new File("$frameworkPath/$frameworkName").canonicalPath
-            def nativeCompileTime = MPPTools.getNativeCompileTime(applicationName, ['compileKotlinMacos',
-                                                                                    'linkBenchmarksAnalyzerReleaseFrameworkMacos',
+            def nativeCompileTime = MPPTools.getNativeCompileTime(project, applicationName, ['compileKotlinMacos',
+                                                                                    'linkBenchmarksAnalyzerDebugFrameworkMacos',
                                                                                     'cinteropLibcurlMacos'])
             def properties = getCommonProperties() + ['type'           : 'native',
                                                       'compilerVersion': "${konanVersion}".toString(),
-                                                      'flags'          : [],
+                                                      'flags'          : compilerFlags(buildType).sort(),
                                                       'benchmarks'     : '[]',
                                                       'compileTime'    : [nativeCompileTime],
                                                       'codeSize'       : MPPTools.getCodeSizeBenchmark(applicationName, nativeExecutable)]

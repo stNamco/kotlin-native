@@ -5,6 +5,8 @@
 
 package kotlin.text
 
+import kotlin.native.concurrent.SharedImmutable
+
 /**
  * Returns the index within this string of the first occurrence of the specified character, starting from the specified offset.
  */
@@ -77,16 +79,6 @@ public actual fun String.replaceFirst(oldChar: Char, newChar: Char, ignoreCase: 
 public actual fun String.replaceFirst(oldValue: String, newValue: String, ignoreCase: Boolean): String {
     val index = indexOf(oldValue, ignoreCase = ignoreCase)
     return if (index < 0) this else this.replaceRange(index, index + oldValue.length, newValue)
-}
-
-/**
- * Returns a copy of this string having its first letter lowercased, or the original string,
- * if it's empty or already starts with a lower case letter.
- *
- * @sample samples.text.Strings.decapitalize
- */
-public actual fun String.decapitalize(): String {
-    return if (isNotEmpty() && this[0].isUpperCase()) substring(0, 1).toLowerCase() + substring(1) else this
 }
 
 /**
@@ -182,13 +174,26 @@ public actual fun String.toCharArray(): CharArray = toCharArray(this, 0, length)
 private external fun toCharArray(string: String, start: Int, size: Int): CharArray
 
 /**
- * Returns a copy of this string having its first letter uppercased, or the original string,
- * if it's empty or already starts with an upper case letter.
+ * Returns a copy of this string having its first letter titlecased using the rules of the default locale,
+ * or the original string if it's empty or already starts with a title case letter.
+ *
+ * The title case of a character is usually the same as its upper case with several exceptions.
+ * The particular list of characters with the special title case form depends on the underlying platform.
  *
  * @sample samples.text.Strings.capitalize
  */
 public actual fun String.capitalize(): String {
     return if (isNotEmpty() && this[0].isLowerCase()) substring(0, 1).toUpperCase() + substring(1) else this
+}
+
+/**
+ * Returns a copy of this string having its first letter lowercased using the rules of the default locale,
+ * or the original string if it's empty or already starts with a lower case letter.
+ *
+ * @sample samples.text.Strings.decapitalize
+ */
+public actual fun String.decapitalize(): String {
+    return if (isNotEmpty() && !this[0].isLowerCase()) substring(0, 1).toLowerCase() + substring(1) else this
 }
 
 /**
@@ -205,7 +210,7 @@ public actual fun CharSequence.repeat(n: Int): String {
         else -> {
             when (length) {
                 0 -> ""
-                1 -> this[0].let { char -> fromCharArray(CharArray(n) { char }, 0, n) }
+                1 -> this[0].let { char -> CharArray(n) { char }.concatToString() }
                 else -> {
                     val sb = StringBuilder(n * length)
                     for (i in 1..n) {
@@ -221,7 +226,8 @@ public actual fun CharSequence.repeat(n: Int): String {
 /**
  * Converts the characters in the specified array to a string.
  */
-public actual fun String(chars: CharArray): String = fromCharArray(chars, 0, chars.size)
+@Deprecated("Use CharArray.concatToString() instead", ReplaceWith("chars.concatToString()"))
+public actual fun String(chars: CharArray): String = chars.concatToString()
 
 /**
  * Converts the characters from a portion of the specified array to a string.
@@ -229,18 +235,19 @@ public actual fun String(chars: CharArray): String = fromCharArray(chars, 0, cha
  * @throws IndexOutOfBoundsException if either [offset] or [length] are less than zero
  * or `offset + length` is out of [chars] array bounds.
  */
+@Deprecated("Use CharArray.concatToString(startIndex, endIndex) instead", ReplaceWith("chars.concatToString(offset, offset + length)"))
 public actual fun String(chars: CharArray, offset: Int, length: Int): String {
     if (offset < 0 || length < 0 || offset + length > chars.size)
         throw ArrayIndexOutOfBoundsException()
 
-    return fromCharArray(chars, offset, length)
+    return unsafeStringFromCharArray(chars, offset, length)
 }
 
 /**
  * Concatenates characters in this [CharArray] into a String.
  */
 @SinceKotlin("1.3")
-public actual fun CharArray.concatToString(): String = fromCharArray(this, 0, size)
+public actual fun CharArray.concatToString(): String = unsafeStringFromCharArray(this, 0, size)
 
 /**
  * Concatenates characters in this [CharArray] or its subrange into a String.
@@ -254,7 +261,7 @@ public actual fun CharArray.concatToString(): String = fromCharArray(this, 0, si
 @SinceKotlin("1.3")
 public actual fun CharArray.concatToString(startIndex: Int, endIndex: Int): String {
     checkBoundsIndexes(startIndex, endIndex, size)
-    return fromCharArray(this, startIndex, endIndex - startIndex)
+    return unsafeStringFromCharArray(this, startIndex, endIndex - startIndex)
 }
 
 /**
@@ -278,7 +285,7 @@ public actual fun String.toCharArray(startIndex: Int, endIndex: Int): CharArray 
  * Malformed byte sequences are replaced by the replacement char `\uFFFD`.
  */
 @SinceKotlin("1.3")
-public actual fun ByteArray.decodeToString(): String = stringFromUtf8Impl(0, size)
+public actual fun ByteArray.decodeToString(): String = unsafeStringFromUtf8(0, size)
 
 /**
  * Decodes a string from the bytes in UTF-8 encoding in this array or its subrange.
@@ -295,9 +302,9 @@ public actual fun ByteArray.decodeToString(): String = stringFromUtf8Impl(0, siz
 public actual fun ByteArray.decodeToString(startIndex: Int, endIndex: Int, throwOnInvalidSequence: Boolean): String {
     checkBoundsIndexes(startIndex, endIndex, size)
     return if (throwOnInvalidSequence)
-        stringFromUtf8OrThrowImpl(startIndex, endIndex - startIndex)
+        unsafeStringFromUtf8OrThrow(startIndex, endIndex - startIndex)
     else
-        stringFromUtf8Impl(startIndex, endIndex - startIndex)
+        unsafeStringFromUtf8(startIndex, endIndex - startIndex)
 }
 
 /**
@@ -306,7 +313,7 @@ public actual fun ByteArray.decodeToString(startIndex: Int, endIndex: Int, throw
  * Any malformed char sequence is replaced by the replacement byte sequence.
  */
 @SinceKotlin("1.3")
-public actual fun String.encodeToByteArray(): ByteArray = toUtf8Impl(0, length)
+public actual fun String.encodeToByteArray(): ByteArray = unsafeStringToUtf8(0, length)
 
 /**
  * Encodes this string or its substring to an array of bytes in UTF-8 encoding.
@@ -323,9 +330,9 @@ public actual fun String.encodeToByteArray(): ByteArray = toUtf8Impl(0, length)
 public actual fun String.encodeToByteArray(startIndex: Int, endIndex: Int, throwOnInvalidSequence: Boolean): ByteArray {
     checkBoundsIndexes(startIndex, endIndex, length)
     return if (throwOnInvalidSequence)
-        toUtf8OrThrowImpl(startIndex, endIndex - startIndex)
+        unsafeStringToUtf8OrThrow(startIndex, endIndex - startIndex)
     else
-        toUtf8Impl(startIndex, endIndex - startIndex)
+        unsafeStringToUtf8(startIndex, endIndex - startIndex)
 }
 
 @SymbolName("Kotlin_String_compareToIgnoreCase")
@@ -336,6 +343,7 @@ public actual fun String.compareTo(other: String, ignoreCase: Boolean): Int {
     else compareToIgnoreCase(this, other)
 }
 
+@SharedImmutable
 private val STRING_CASE_INSENSITIVE_ORDER = Comparator<String> { a, b -> a.compareTo(b, ignoreCase = true) }
 
 public actual val String.Companion.CASE_INSENSITIVE_ORDER: Comparator<String>

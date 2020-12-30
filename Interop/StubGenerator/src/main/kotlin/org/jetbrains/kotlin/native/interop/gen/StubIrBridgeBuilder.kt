@@ -5,7 +5,7 @@
 package org.jetbrains.kotlin.native.interop.gen
 
 import org.jetbrains.kotlin.native.interop.gen.jvm.KotlinPlatform
-import org.jetbrains.kotlin.native.interop.indexer.ObjCProtocol
+import org.jetbrains.kotlin.native.interop.indexer.*
 import org.jetbrains.kotlin.utils.addToStdlib.firstIsInstanceOrNull
 
 class BridgeBuilderResult(
@@ -24,6 +24,8 @@ class StubIrBridgeBuilder(
         private val builderResult: StubIrBuilderResult) {
 
     private val globalAddressExpressions = mutableMapOf<Pair<String, PropertyAccessor>, KotlinExpression>()
+
+    private val wrapperGenerator = CWrappersGenerator(context)
 
     private fun getGlobalAddressExpression(cGlobalName: String, accessor: PropertyAccessor) =
             globalAddressExpressions.getOrPut(Pair(cGlobalName, accessor)) {
@@ -68,9 +70,11 @@ class StubIrBridgeBuilder(
     private val excludedStubs = mutableSetOf<StubIrElement>()
 
     private val bridgeGeneratingVisitor = object : StubIrVisitor<StubContainer?, Unit> {
-        override fun visitClass(element: ClassStub, owner: StubContainer?) {
+
+        override fun visitClass(element: ClassStub, data: StubContainer?) {
             element.annotations.filterIsInstance<AnnotationStub.ObjC.ExternalClass>().firstOrNull()?.let {
-                if (it.protocolGetter.isNotEmpty() && element.origin is StubOrigin.ObjCProtocol) {
+                val origin = element.origin
+                if (it.protocolGetter.isNotEmpty() && origin is StubOrigin.ObjCProtocol && !origin.isMeta) {
                     val protocol = (element.origin as StubOrigin.ObjCProtocol).protocol
                     // TODO: handle the case when protocol getter stub can't be compiled.
                     generateProtocolGetter(it.protocolGetter, protocol)
@@ -81,15 +85,16 @@ class StubIrBridgeBuilder(
             }
         }
 
-        override fun visitTypealias(element: TypealiasStub, owner: StubContainer?) {
+        override fun visitTypealias(element: TypealiasStub, data: StubContainer?) {
         }
 
-        override fun visitFunction(element: FunctionStub, owner: StubContainer?) {
+        override fun visitFunction(element: FunctionStub, data: StubContainer?) {
             try {
                 when {
                     element.external -> tryProcessCCallAnnotation(element)
                     element.isOptionalObjCMethod() -> { }
-                    owner != null && owner.isInterface -> { }
+                    element.origin is StubOrigin.Synthetic.EnumByValue -> { }
+                    data != null && data.isInterface -> { }
                     else -> generateBridgeBody(element)
                 }
             } catch (e: Throwable) {
@@ -103,26 +108,21 @@ class StubIrBridgeBuilder(
                     ?: return
             val cCallAnnotation = function.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>()
                     ?: return
-            val cCallSymbolName = cCallAnnotation.symbolName
-            simpleBridgeGenerator.insertNativeBridge(
-                    function,
-                    emptyList(),
-                    listOf("extern const void* $cCallSymbolName __asm(${cCallSymbolName.quoteAsKotlinLiteral()});",
-                            "extern const void* $cCallSymbolName = &${origin.function.name};")
-            )
+            val wrapper = wrapperGenerator.generateCCalleeWrapper(origin.function, cCallAnnotation.symbolName)
+            simpleBridgeGenerator.insertNativeBridge(function, emptyList(), wrapper.lines)
         }
 
-        override fun visitProperty(element: PropertyStub, owner: StubContainer?) {
+        override fun visitProperty(element: PropertyStub, data: StubContainer?) {
             try {
                 when (val kind = element.kind) {
                     is PropertyStub.Kind.Constant -> {
                     }
                     is PropertyStub.Kind.Val -> {
-                        visitPropertyAccessor(kind.getter, owner)
+                        visitPropertyAccessor(kind.getter, data)
                     }
                     is PropertyStub.Kind.Var -> {
-                        visitPropertyAccessor(kind.getter, owner)
-                        visitPropertyAccessor(kind.setter, owner)
+                        visitPropertyAccessor(kind.getter, data)
+                        visitPropertyAccessor(kind.setter, data)
                     }
                 }
             } catch (e: Throwable) {
@@ -131,47 +131,49 @@ class StubIrBridgeBuilder(
             }
         }
 
-        override fun visitConstructor(constructorStub: ConstructorStub, owner: StubContainer?) {
+        override fun visitConstructor(constructorStub: ConstructorStub, data: StubContainer?) {
         }
 
-        override fun visitPropertyAccessor(accessor: PropertyAccessor, owner: StubContainer?) {
-            when (accessor) {
+        override fun visitPropertyAccessor(propertyAccessor: PropertyAccessor, data: StubContainer?) {
+            when (propertyAccessor) {
                 is PropertyAccessor.Getter.SimpleGetter -> {
-                    if (accessor in builderResult.bridgeGenerationComponents.getterToBridgeInfo) {
-                        val extra = builderResult.bridgeGenerationComponents.getterToBridgeInfo.getValue(accessor)
-                        val typeInfo = extra.typeInfo
-                        val expression = if (extra.isArray) {
-                            val getAddressExpression = getGlobalAddressExpression(extra.cGlobalName, accessor)
-                            typeInfo.argFromBridged(getAddressExpression, kotlinFile, nativeBacked = accessor) + "!!"
-                        } else {
-                            typeInfo.argFromBridged(simpleBridgeGenerator.kotlinToNative(
-                                    nativeBacked = accessor,
+                    when (propertyAccessor) {
+                        in builderResult.bridgeGenerationComponents.getterToBridgeInfo -> {
+                            val extra = builderResult.bridgeGenerationComponents.getterToBridgeInfo.getValue(propertyAccessor)
+                            val typeInfo = extra.typeInfo
+                            propertyAccessorBridgeBodies[propertyAccessor] = typeInfo.argFromBridged(simpleBridgeGenerator.kotlinToNative(
+                                    nativeBacked = propertyAccessor,
                                     returnType = typeInfo.bridgedType,
                                     kotlinValues = emptyList(),
                                     independent = false
                             ) {
                                 typeInfo.cToBridged(expr = extra.cGlobalName)
-                            }, kotlinFile, nativeBacked = accessor)
+                            }, kotlinFile, nativeBacked = propertyAccessor)
                         }
-                        propertyAccessorBridgeBodies[accessor] = expression
+                        in builderResult.bridgeGenerationComponents.arrayGetterInfo -> {
+                            val extra = builderResult.bridgeGenerationComponents.arrayGetterInfo.getValue(propertyAccessor)
+                            val typeInfo = extra.typeInfo
+                            val getAddressExpression = getGlobalAddressExpression(extra.cGlobalName, propertyAccessor)
+                            propertyAccessorBridgeBodies[propertyAccessor] = typeInfo.argFromBridged(getAddressExpression, kotlinFile, nativeBacked = propertyAccessor) + "!!"
+                        }
                     }
                 }
 
                 is PropertyAccessor.Getter.ReadBits -> {
-                    val extra = builderResult.bridgeGenerationComponents.getterToBridgeInfo.getValue(accessor)
+                    val extra = builderResult.bridgeGenerationComponents.getterToBridgeInfo.getValue(propertyAccessor)
                     val rawType = extra.typeInfo.bridgedType
-                    val readBits = "readBits(this.rawPtr, ${accessor.offset}, ${accessor.size}, ${accessor.signed}).${rawType.convertor!!}()"
+                    val readBits = "readBits(this.rawPtr, ${propertyAccessor.offset}, ${propertyAccessor.size}, ${propertyAccessor.signed}).${rawType.convertor!!}()"
                     val getExpr = extra.typeInfo.argFromBridged(readBits, kotlinFile, object : NativeBacked {})
-                    propertyAccessorBridgeBodies[accessor] = getExpr
+                    propertyAccessorBridgeBodies[propertyAccessor] = getExpr
                 }
 
-                is PropertyAccessor.Setter.SimpleSetter -> when (accessor) {
+                is PropertyAccessor.Setter.SimpleSetter -> when (propertyAccessor) {
                     in builderResult.bridgeGenerationComponents.setterToBridgeInfo -> {
-                        val extra = builderResult.bridgeGenerationComponents.setterToBridgeInfo.getValue(accessor)
+                        val extra = builderResult.bridgeGenerationComponents.setterToBridgeInfo.getValue(propertyAccessor)
                         val typeInfo = extra.typeInfo
                         val bridgedValue = BridgeTypedKotlinValue(typeInfo.bridgedType, typeInfo.argToBridged("value"))
                         val setter = simpleBridgeGenerator.kotlinToNative(
-                                nativeBacked = accessor,
+                                nativeBacked = propertyAccessor,
                                 returnType = BridgedType.VOID,
                                 kotlinValues = listOf(bridgedValue),
                                 independent = false
@@ -179,28 +181,52 @@ class StubIrBridgeBuilder(
                             out("${extra.cGlobalName} = ${typeInfo.cFromBridged(
                                     nativeValues.single(),
                                     scope,
-                                    nativeBacked = accessor
+                                    nativeBacked = propertyAccessor
                             )};")
                             ""
                         }
-                        propertyAccessorBridgeBodies[accessor] = setter
+                        propertyAccessorBridgeBodies[propertyAccessor] = setter
                     }
                 }
 
                 is PropertyAccessor.Setter.WriteBits -> {
-                    val extra = builderResult.bridgeGenerationComponents.setterToBridgeInfo.getValue(accessor)
+                    val extra = builderResult.bridgeGenerationComponents.setterToBridgeInfo.getValue(propertyAccessor)
                     val rawValue = extra.typeInfo.argToBridged("value")
-                    propertyAccessorBridgeBodies[accessor] = "writeBits(this.rawPtr, ${accessor.offset}, ${accessor.size}, $rawValue.toLong())"
+                    propertyAccessorBridgeBodies[propertyAccessor] = "writeBits(this.rawPtr, ${propertyAccessor.offset}, ${propertyAccessor.size}, $rawValue.toLong())"
                 }
 
                 is PropertyAccessor.Getter.InterpretPointed -> {
-                    val getAddressExpression = getGlobalAddressExpression(accessor.cGlobalName, accessor)
-                    propertyAccessorBridgeBodies[accessor] = getAddressExpression
+                    val getAddressExpression = getGlobalAddressExpression(propertyAccessor.cGlobalName, propertyAccessor)
+                    propertyAccessorBridgeBodies[propertyAccessor] = getAddressExpression
+                }
+
+                is PropertyAccessor.Getter.ExternalGetter -> {
+                    if (propertyAccessor in builderResult.wrapperGenerationComponents.getterToWrapperInfo) {
+                        val extra = builderResult.wrapperGenerationComponents.getterToWrapperInfo.getValue(propertyAccessor)
+                        val cCallAnnotation = propertyAccessor.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>()
+                                ?: error("external getter for ${extra.global.name} wasn't marked with @CCall")
+                        val wrapper = if (extra.passViaPointer) {
+                            wrapperGenerator.generateCGlobalByPointerGetter(extra.global, cCallAnnotation.symbolName)
+                        } else {
+                            wrapperGenerator.generateCGlobalGetter(extra.global, cCallAnnotation.symbolName)
+                        }
+                        simpleBridgeGenerator.insertNativeBridge(propertyAccessor, emptyList(), wrapper.lines)
+                    }
+                }
+
+                is PropertyAccessor.Setter.ExternalSetter -> {
+                    if (propertyAccessor in builderResult.wrapperGenerationComponents.setterToWrapperInfo) {
+                        val extra = builderResult.wrapperGenerationComponents.setterToWrapperInfo.getValue(propertyAccessor)
+                        val cCallAnnotation = propertyAccessor.annotations.firstIsInstanceOrNull<AnnotationStub.CCall.Symbol>()
+                                ?: error("external setter for ${extra.global.name} wasn't marked with @CCall")
+                        val wrapper = wrapperGenerator.generateCGlobalSetter(extra.global, cCallAnnotation.symbolName)
+                        simpleBridgeGenerator.insertNativeBridge(propertyAccessor, emptyList(), wrapper.lines)
+                    }
                 }
             }
         }
 
-        override fun visitSimpleStubContainer(simpleStubContainer: SimpleStubContainer, owner: StubContainer?) {
+        override fun visitSimpleStubContainer(simpleStubContainer: SimpleStubContainer, data: StubContainer?) {
             simpleStubContainer.classes.forEach {
                 it.accept(this, simpleStubContainer)
             }
@@ -219,13 +245,12 @@ class StubIrBridgeBuilder(
         }
     }
 
-    private fun isCValuesRef(type: StubType): Boolean {
-        if (type !is WrapperStubType) return false
-
-        return type.kotlinType is KotlinClassifierType && type.kotlinType.classifier == KotlinTypes.cValuesRef
-    }
+    private fun isCValuesRef(type: StubType): Boolean =
+            (type as? ClassifierStubType)?.let { it.classifier == KotlinTypes.cValuesRef }
+                    ?: false
 
     private fun generateBridgeBody(function: FunctionStub) {
+        assert(context.platform == KotlinPlatform.JVM) { "Function ${function.name} was not marked as external." }
         assert(function.origin is StubOrigin.Function) { "Can't create bridge for ${function.name}" }
         val origin = function.origin as StubOrigin.Function
         val bodyGenerator = KotlinCodeBuilder(scope = kotlinFile)

@@ -17,6 +17,7 @@
 package org.jetbrains.kotlin.konan.util
 
 import org.jetbrains.kotlin.konan.target.KonanTarget
+import org.jetbrains.kotlin.util.parseSpaceSeparatedArgs
 import java.io.File
 import java.io.StringReader
 import java.util.*
@@ -112,6 +113,11 @@ class DefFile(val file:File?, val config:DefFileConfig, val manifestAddendProper
         val disableDesignatedInitializerChecks by lazy {
             properties.getProperty("disableDesignatedInitializerChecks")?.toBoolean() ?: false
         }
+
+        val foreignExceptionMode by lazy {
+            properties.getProperty("foreignExceptionMode")
+        }
+
     }
 }
 

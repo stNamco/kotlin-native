@@ -19,7 +19,7 @@ class ContentsTest {
     private fun klibContents(library: String, printOutput: Boolean = false, expected: () -> String) {
         val output = StringBuilder()
         val lib = Library(library, null, "host")
-        lib.contents(output)
+        lib.contents(output, false)
         if (printOutput) {
             println(output.trim().toString())
         }
@@ -33,7 +33,8 @@ class ContentsTest {
     @Test
     fun `Stdlib content should be printed without exceptions`() {
         val output = StringBuilder()
-        Library(Distribution().stdlib, null, "host").contents(output)
+        val distributionPath = System.getProperty("konan.home")
+        Library(Distribution(distributionPath).stdlib, null, "host").contents(output, false)
     }
 
     @Test
@@ -47,6 +48,7 @@ class ContentsTest {
 
         package <root> {
             @A @B fun a()
+            fun Foo.e()
             fun f1(x: Foo)
             fun f2(x: Foo, y: Foo): Int
             inline fun i1(block: () -> Foo)
@@ -61,7 +63,6 @@ class ContentsTest {
             fun <T, F> t3(x: T, y: F)
             inline fun <reified T> t4(x: T)
             fun <T : Number> t5(x: T)
-            fun Foo.e()
         }
         """.trimIndent()
     }
@@ -357,6 +358,6 @@ class ContentsTest {
     }
 
     companion object {
-        val LIBRARY_DIRECTORY = Paths.get("build/konan/libs").resolve( HostManager.hostName)
+        val LIBRARY_DIRECTORY = Paths.get("build/konan/libs").resolve(HostManager.hostName)
     }
 }

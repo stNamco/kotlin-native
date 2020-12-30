@@ -41,13 +41,6 @@ internal annotation class Intrinsic
 public annotation class ExportForCompiler
 
 /**
- * Annotated constructor will be inlined.
- */
-@Target(AnnotationTarget.CONSTRUCTOR)
-@Retention(AnnotationRetention.BINARY)
-internal annotation class InlineConstructor
-
-/**
  * Class is frozen by default. Also this annotation is (ab)used for marking objects
  * where mutability checks are not needed, and they are shared, such as atomics.
  */
@@ -97,6 +90,7 @@ internal annotation class FixmeConcurrency
 @Retention(AnnotationRetention.BINARY)
 internal annotation class Escapes(val who: Int)
 
+// Decyphering of binary values can be found in EscapeAnalysis.kt
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.BINARY)
 internal annotation class PointsTo(vararg val onWhom: Int)
@@ -122,4 +116,32 @@ annotation class Independent
  */
 @Target(AnnotationTarget.FUNCTION)
 @Retention(AnnotationRetention.BINARY)
-@PublishedApi internal annotation class FilterExceptions
+@PublishedApi internal annotation class FilterExceptions(val mode: String = "terminate")
+
+/**
+ * Marks a class whose instances to be added to the list of leak detector candidates.
+ */
+@Target(AnnotationTarget.CLASS)
+@PublishedApi internal annotation class LeakDetectorCandidate
+
+/**
+ * Indicates that given top level signleton object can be created in compile time and thus
+ * members access doesn't need to use an init barrier and allow better optimizations for
+ * field access, such as constant folding.
+ */
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.SOURCE)
+public annotation class CanBePrecreated
+
+/**
+ * Marks a class that has a finalizer.
+ */
+@Target(AnnotationTarget.CLASS)
+internal annotation class HasFinalizer
+
+/**
+ * Marks a declaration that is internal for Kotlin/Native and shouldn't be used externally.
+ */
+@RequiresOptIn(level = RequiresOptIn.Level.ERROR)
+@Retention(value = AnnotationRetention.BINARY)
+internal annotation class InternalForKotlinNative

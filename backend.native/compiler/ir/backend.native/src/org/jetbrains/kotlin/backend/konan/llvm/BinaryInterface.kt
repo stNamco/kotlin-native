@@ -6,124 +6,78 @@
 package org.jetbrains.kotlin.backend.konan.llvm
 
 import llvm.LLVMTypeRef
-import org.jetbrains.kotlin.backend.common.serialization.KotlinManglerImpl
-import org.jetbrains.kotlin.backend.konan.*
+import org.jetbrains.kotlin.backend.common.ir.allParameters
+import org.jetbrains.kotlin.backend.common.serialization.mangle.MangleConstant
+import org.jetbrains.kotlin.backend.common.serialization.mangle.SpecialDeclarationType
+import org.jetbrains.kotlin.backend.konan.RuntimeNames
 import org.jetbrains.kotlin.backend.konan.descriptors.externalSymbolOrThrow
-import org.jetbrains.kotlin.backend.konan.descriptors.getAnnotationValue
+import org.jetbrains.kotlin.backend.konan.descriptors.getAnnotationStringValue
 import org.jetbrains.kotlin.backend.konan.descriptors.isAbstract
-import org.jetbrains.kotlin.backend.konan.ir.allParameters
-import org.jetbrains.kotlin.backend.konan.ir.getObjCMethodInfo
-import org.jetbrains.kotlin.backend.konan.ir.isObjCClassMethod
 import org.jetbrains.kotlin.backend.konan.ir.isUnit
-import org.jetbrains.kotlin.backend.konan.llvm.KonanMangler.isExported
+import org.jetbrains.kotlin.backend.konan.isExternalObjCClass
+import org.jetbrains.kotlin.backend.konan.isKotlinObjCClass
+import org.jetbrains.kotlin.backend.konan.serialization.AbstractKonanIrMangler
 import org.jetbrains.kotlin.ir.declarations.*
-import org.jetbrains.kotlin.ir.types.*
+import org.jetbrains.kotlin.ir.util.findAnnotation
 import org.jetbrains.kotlin.ir.util.fqNameForIrSerialization
-import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.util.isSuspend
-import org.jetbrains.kotlin.ir.util.isVararg
-import org.jetbrains.kotlin.backend.konan.isInlinedNative
+import org.jetbrains.kotlin.ir.util.render
 import org.jetbrains.kotlin.konan.library.KonanLibrary
 import org.jetbrains.kotlin.library.uniqueName
+import org.jetbrains.kotlin.name.Name
 
 
 // This file describes the ABI for Kotlin descriptors of exported declarations.
 // TODO: revise the naming scheme to ensure it produces unique names.
 // TODO: do not serialize descriptors of non-exported declarations.
 
-object KonanMangler : KotlinManglerImpl() {
+object KonanBinaryInterface {
+    private val mangler = object : AbstractKonanIrMangler(true) {}
 
-    override val IrType.isInlined
-        get() = this.isInlinedNative()
+    private val exportChecker = mangler.getExportChecker()
 
-    /**
-     * Defines whether the declaration is exported, i.e. visible from other modules.
-     *
-     * Exported declarations must have predictable and stable ABI
-     * that doesn't depend on any internal transformations (e.g. IR lowering),
-     * and so should be computable from the descriptor itself without checking a backend state.
-     */
-    override fun IrDeclaration.isPlatformSpecificExported(): Boolean {
-        // TODO: revise
-        val descriptorAnnotations = this.descriptor.annotations
-        if (descriptorAnnotations.hasAnnotation(RuntimeNames.symbolNameAnnotation)) {
-            // Treat any `@SymbolName` declaration as exported.
-            return true
-        }
-        if (descriptorAnnotations.hasAnnotation(RuntimeNames.exportForCppRuntime)) {
-            // Treat any `@ExportForCppRuntime` declaration as exported.
-            return true
-        }
-        if (descriptorAnnotations.hasAnnotation(RuntimeNames.cnameAnnotation)) {
-            // Treat `@CName` declaration as exported.
-            return true
-        }
-        if (descriptorAnnotations.hasAnnotation(RuntimeNames.exportForCompilerAnnotation)) {
-            return true
-        }
+    val IrFunction.functionName: String get() = mangler.run { signatureString }
 
-        return false
+    val IrFunction.symbolName: String get() = funSymbolNameImpl()
+    val IrField.symbolName: String get() =
+        withPrefix(MangleConstant.FIELD_PREFIX, fieldSymbolNameImpl())
+    val IrClass.typeInfoSymbolName: String get() =
+        withPrefix(MangleConstant.CLASS_PREFIX, typeInfoSymbolNameImpl())
+    fun isExported(declaration: IrDeclaration) = exportChecker.run {
+        check(declaration, SpecialDeclarationType.REGULAR) || declaration.isPlatformSpecificExported()
     }
 
-    override val IrFunction.argsPart get() = this.valueParameters.map {
+    private fun withPrefix(prefix: String, mangle: String) = "$prefix:$mangle"
 
-        // TODO: there are clashes originating from ObjectiveC interop.
-        // kotlinx.cinterop.ObjCClassOf<T>.create(format: kotlin.String): T defined in platform.Foundation in file Foundation.kt
-        // and
-        // kotlinx.cinterop.ObjCClassOf<T>.create(string: kotlin.String): T defined in platform.Foundation in file Foundation.kt
-
-        val argName =
-                if (this.hasObjCMethodAnnotation || this.hasObjCFactoryAnnotation || this.isObjCClassMethod()) "${it.name}:" else ""
-        "$argName${typeToHashString(it.type)}${if (it.isVararg) "_VarArg" else ""}"
-    }.joinToString(";")
-
-
-    override val IrFunction.platformSpecificFunctionName: String?
-        get() {
-            (if (this is IrConstructor && this.isObjCConstructor) this.getObjCInitMethod() else this)?.getObjCMethodInfo()
-                ?.let {
-                    return buildString {
-                        if (extensionReceiverParameter != null) {
-                            append(extensionReceiverParameter!!.type.getClass()!!.name)
-                            append(".")
-                        }
-
-                        append("objc:")
-                        append(it.selector)
-                        if (this@platformSpecificFunctionName is IrConstructor && this@platformSpecificFunctionName.isObjCConstructor) append("#Constructor")
-
-                        if ((this@platformSpecificFunctionName as? IrSimpleFunction)?.correspondingProperty != null) {
-                            append("#Accessor")
-                        }
-                    }
-                }
-            return null
+    private fun IrFunction.funSymbolNameImpl(): String {
+        if (!isExported(this)) {
+            throw AssertionError(render())
         }
 
-    internal val IrFunction.symbolName: String
-        get() {
-            if (!this.isExported()) {
-                throw AssertionError(this.descriptor.toString())
+        if (isExternal) {
+            this.externalSymbolOrThrow()?.let {
+                return it
             }
-
-            if (isExternal) {
-                this.descriptor.externalSymbolOrThrow()?.let {
-                    return it
-                }
-            }
-
-            this.descriptor.annotations.findAnnotation(RuntimeNames.exportForCppRuntime)?.let {
-                val name = getAnnotationValue(it) ?: this.name.asString()
-                return name // no wrapping currently required
-            }
-
-            val parent = this.parent
-
-            val containingDeclarationPart = parent.fqNameForIrSerialization.let {
-                if (it.isRoot) "" else "$it."
-            }
-            return "kfun:$containingDeclarationPart$functionName"
         }
+
+        this.annotations.findAnnotation(RuntimeNames.exportForCppRuntime)?.let {
+            val name = it.getAnnotationStringValue() ?: this.name.asString()
+            return name // no wrapping currently required
+        }
+
+        return withPrefix(MangleConstant.FUN_PREFIX, mangler.run { mangleString })
+    }
+
+    private fun IrField.fieldSymbolNameImpl(): String {
+        val containingDeclarationPart = parent.fqNameForIrSerialization.let {
+            if (it.isRoot) "" else "$it."
+        }
+        return "$containingDeclarationPart$name"
+    }
+
+    private fun IrClass.typeInfoSymbolNameImpl(): String {
+        return this.fqNameForIrSerialization.toString()
+    }
 }
 
 internal val IrClass.writableTypeInfoSymbolName: String
@@ -132,7 +86,7 @@ internal val IrClass.writableTypeInfoSymbolName: String
         return "ktypew:" + this.fqNameForIrSerialization.toString()
     }
 
-internal val IrClass.objectInstanceFieldSymbolName: String
+internal val IrClass.globalObjectStorageSymbolName: String
     get() {
         assert (this.isExported())
         assert (this.kind.isSingleton)
@@ -141,25 +95,38 @@ internal val IrClass.objectInstanceFieldSymbolName: String
         return "kobjref:$fqNameForIrSerialization"
     }
 
-internal val IrClass.objectInstanceShadowFieldSymbolName: String
+internal val IrClass.threadLocalObjectStorageGetterSymbolName: String
     get() {
         assert (this.isExported())
         assert (this.kind.isSingleton)
         assert (!this.isUnit())
-        assert (this.objectIsShared)
 
-        return "kshadowobjref:$fqNameForIrSerialization"
+        return "kobjget:$fqNameForIrSerialization"
     }
 
-val IrFunction.functionName get() = with(KonanMangler) { functionName }
+internal val IrClass.kotlinObjCClassInfoSymbolName: String
+    get() {
+        assert (this.isExported())
+        assert (this.isKotlinObjCClass())
 
-val IrFunction.symbolName get() = with(KonanMangler) { symbolName }
+        return "kobjcclassinfo:$fqNameForIrSerialization"
+    }
 
-val IrField.symbolName get() = with(KonanMangler) { symbolName }
+fun IrFunction.computeFunctionName() = with(KonanBinaryInterface) { functionName }
 
-val IrClass.typeInfoSymbolName get() = with(KonanMangler) { typeInfoSymbolName }
+fun IrFunction.computeFullName() = parent.fqNameForIrSerialization.child(Name.identifier(computeFunctionName())).asString()
 
-fun IrDeclaration.isExported() = with(KonanMangler) { isExported() }
+fun IrFunction.computeSymbolName() = with(KonanBinaryInterface) { symbolName }.replaceSpecialSymbols()
+
+fun IrField.computeSymbolName() = with(KonanBinaryInterface) { symbolName }.replaceSpecialSymbols()
+
+fun IrClass.computeTypeInfoSymbolName() = with(KonanBinaryInterface) { typeInfoSymbolName }.replaceSpecialSymbols()
+
+private fun String.replaceSpecialSymbols() =
+        // '@' is used for symbol versioning in GCC: https://gcc.gnu.org/wiki/SymbolVersioning.
+        this.replace("@", "__at__")
+
+fun IrDeclaration.isExported() = KonanBinaryInterface.isExported(this)
 
 // TODO: bring here dependencies of this method?
 internal fun RuntimeAware.getLlvmFunctionType(function: IrFunction): LLVMTypeRef {
@@ -173,7 +140,7 @@ internal fun RuntimeAware.getLlvmFunctionType(function: IrFunction): LLVMTypeRef
         paramTypes.add(kObjHeaderPtr)                       // Suspend functions have implicit parameter of type Continuation<>.
     if (isObjectType(returnType)) paramTypes.add(kObjHeaderPtrPtr)
 
-    return functionType(returnType, isVarArg = false, paramTypes = *paramTypes.toTypedArray())
+    return functionType(returnType, isVarArg = false, paramTypes = paramTypes.toTypedArray())
 }
 
 internal val IrClass.typeInfoHasVtableAttached: Boolean

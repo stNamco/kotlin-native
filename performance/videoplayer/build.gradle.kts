@@ -4,6 +4,7 @@
  */
 
 import org.jetbrains.kotlin.PlatformInfo
+import org.jetbrains.kotlin.getCompileOnlyBenchmarksOpts
 import org.jetbrains.kotlin.getNativeProgramExtension
 import org.jetbrains.kotlin.mingwPath
 
@@ -11,7 +12,7 @@ plugins {
     id("compile-benchmarking")
 }
 
-val dist = file(findProperty("org.jetbrains.kotlin.native.home") ?: "dist")
+val dist = file(findProperty("kotlin.native.home") ?: "dist")
 val toolSuffix = if (System.getProperty("os.name").startsWith("Windows")) ".bat" else ""
 val binarySuffix = getNativeProgramExtension()
 
@@ -47,9 +48,13 @@ var includeDirsSdl = when {
     else -> error("Unsupported platform")
 }
 
+val defaultCompilerOpts =  listOf("-g")
+val buildOpts = getCompileOnlyBenchmarksOpts(project, defaultCompilerOpts)
+
 compileBenchmark {
     applicationName = "Videoplayer"
     repeatNumber = 10
+    compilerOpts = buildOpts
     buildSteps {
         step("runCinteropFfmpeg") {
             command = listOf(
@@ -74,7 +79,7 @@ compileBenchmark {
                 "-l", "$dist/../samples/videoplayer/build/classes/kotlin/videoPlayer/main/videoplayer-cinterop-sdl.klib",
                 "-Xmulti-platform", "$dist/../samples/videoplayer/src/videoPlayerMain/kotlin",
                 "-entry", "sample.videoplayer.main"
-            ) + linkerOpts
+            ) + buildOpts + linkerOpts
         }
     }
 }

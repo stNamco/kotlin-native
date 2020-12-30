@@ -5,7 +5,6 @@
 
 package kotlin.collections
 
-import kotlin.native.internal.InlineConstructor
 import kotlin.internal.PureReifiable
 
 /** Returns the array if it's not `null`, or an empty array otherwise. */
@@ -23,8 +22,8 @@ internal fun checkCopyOfRangeArguments(fromIndex: Int, toIndex: Int, size: Int) 
 /**
  * Returns a string representation of the contents of the subarray of the specified array as if it is [List].
  */
-@SinceKotlin("1.1")
 @kotlin.internal.InlineOnly
+@Deprecated("This function will become internal soon.", level = DeprecationLevel.WARNING)
 public inline fun <T> Array<out T>.subarrayContentToString(offset: Int, length: Int): String {
     val sb = StringBuilder(2 + length * 3)
     sb.append("[")
@@ -46,8 +45,9 @@ public inline fun <T> Array<out T>.subarrayContentToString(offset: Int, length: 
  * If any of arrays contains itself on any nesting level the behavior is undefined.
  */
 @SinceKotlin("1.1")
-@UseExperimental(ExperimentalUnsignedTypes::class)
-internal fun <T> Array<out T>.contentDeepHashCodeImpl(): Int {
+@OptIn(ExperimentalUnsignedTypes::class)
+internal fun <T> Array<out T>?.contentDeepHashCodeImpl(): Int {
+    if (this == null) return 0
     var result = 1
     for (element in this) {
         val elementHash = when (element) {

@@ -17,6 +17,8 @@
 package org.jetbrains.benchmarksLauncher
 
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 
 actual fun writeToFile(fileName: String, text: String) {
     File(fileName).printWriter().use { out ->
@@ -35,4 +37,38 @@ actual inline fun measureNanoTime(block: () -> Unit): Long {
 }
 
 actual fun cleanup() {}
+
+actual fun printStderr(message: String) {
+    System.err.print(message)
+}
+
+actual fun currentTime(): String =
+        SimpleDateFormat("HH:mm:ss").format(Date())
+
+actual fun nanoTime(): Long = System.nanoTime()
+
+actual class Blackhole {
+    actual companion object {
+        actual var consumer = 0
+        actual fun consume(value: Any) {
+            consumer += value.hashCode()
+        }
+    }
+}
+
+actual class Random actual constructor() {
+    actual companion object {
+        actual var seedInt = 0
+        actual fun nextInt(boundary: Int): Int {
+            seedInt = (3 * seedInt + 11) % boundary
+            return seedInt
+        }
+
+        actual var seedDouble: Double = 0.1
+        actual fun nextDouble(boundary: Double): Double {
+            seedDouble = (7.0 * seedDouble + 7.0) % boundary
+            return seedDouble
+        }
+    }
+}
 

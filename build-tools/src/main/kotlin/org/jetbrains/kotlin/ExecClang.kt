@@ -34,9 +34,20 @@ class ExecClang(private val project: Project) {
         return platformManager.platform(target).clang.clangArgsForKonanSources.asList()
     }
 
-    private fun konanArgs(targetName: String?): List<String> {
+    fun konanArgs(targetName: String?): List<String> {
         val target = platformManager.targetManager(targetName).target
         return konanArgs(target)
+    }
+
+    fun resolveExecutable(executableOrNull: String?): String {
+        val executable = executableOrNull ?: "clang"
+
+        if (listOf("clang", "clang++").contains(executable)) {
+            val llvmDir = project.findProperty("llvmDir")
+            return "${llvmDir}/bin/$executable"
+        } else {
+            throw GradleException("unsupported clang executable: $executable")
+        }
     }
 
     // The bare ones invoke clang with system default sysroot.
@@ -77,27 +88,15 @@ class ExecClang(private val project: Project) {
     }
 
     private fun execClang(defaultArgs: List<String>, action: Action<in ExecSpec>): ExecResult {
-        val extendedAction = object : Action<ExecSpec> {
-            override fun execute(execSpec: ExecSpec) {
-                action.execute(execSpec)
+        val extendedAction = Action<ExecSpec> { execSpec ->
+            action.execute(execSpec)
+            execSpec.apply {
+                executable = resolveExecutable(executable)
 
-                execSpec.apply {
-                    if (executable == null) {
-                        executable = "clang"
-                    }
-
-                    if (listOf("clang", "clang++").contains(executable)) {
-                        val llvmDir = project.findProperty("llvmDir")
-                        executable = "${llvmDir}/bin/$executable" }
-                    else {
-                        throw GradleException("unsupported clang executable: $executable")
-                    }
-
-                    val hostPlatform = project.findProperty("hostPlatform") as Platform
-                    environment["PATH"] = project.files(hostPlatform.clang.clangPaths).asPath +
-                            java.io.File.pathSeparator + environment["PATH"]
-                    args(defaultArgs)
-                }
+                val hostPlatform = project.findProperty("hostPlatform") as Platform
+                environment["PATH"] = project.files(hostPlatform.clang.clangPaths).asPath +
+                        java.io.File.pathSeparator + environment["PATH"]
+                args = args + defaultArgs
             }
         }
         return project.exec(extendedAction)

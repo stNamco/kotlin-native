@@ -14,7 +14,6 @@ import org.jetbrains.kotlin.backend.common.lower.irNot
 import org.jetbrains.kotlin.backend.konan.*
 import org.jetbrains.kotlin.backend.konan.ir.containsNull
 import org.jetbrains.kotlin.backend.konan.ir.isSubtypeOf
-import org.jetbrains.kotlin.descriptors.CallableMemberDescriptor
 import org.jetbrains.kotlin.ir.builders.*
 import org.jetbrains.kotlin.ir.declarations.IrFile
 import org.jetbrains.kotlin.ir.descriptors.IrBuiltinOperatorDescriptor
@@ -26,10 +25,10 @@ import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
 import org.jetbrains.kotlin.ir.types.makeNullable
 import org.jetbrains.kotlin.ir.builders.irGet
 import org.jetbrains.kotlin.ir.declarations.IrClass
+import org.jetbrains.kotlin.ir.declarations.IrDeclarationOrigin
 import org.jetbrains.kotlin.ir.symbols.IrFunctionSymbol
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.isNothing
-import org.jetbrains.kotlin.ir.types.toKotlinType
 import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.ir.util.defaultOrNullableType
 import org.jetbrains.kotlin.ir.util.isNullConst
@@ -40,7 +39,6 @@ import org.jetbrains.kotlin.ir.visitors.transformChildrenVoid
  */
 internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass, IrBuildingTransformer(context) {
 
-    private val builtIns = context.builtIns
     private val irBuiltins = context.irModule!!.irBuiltins
     private val symbols = context.ir.symbols
 
@@ -50,13 +48,23 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
 
     override fun visitCall(expression: IrCall): IrExpression {
         expression.transformChildrenVoid(this)
-        val descriptor = expression.descriptor
 
-        if (descriptor is IrBuiltinOperatorDescriptor) {
-            return transformBuiltinOperator(expression)
+        return when (expression.symbol) {
+            irBuiltins.eqeqSymbol, in ieee754EqualsSymbols() -> lowerEqeq(expression)
+
+            irBuiltins.eqeqeqSymbol -> lowerEqeqeq(expression)
+
+            irBuiltins.checkNotNullSymbol -> lowerCheckNotNull(expression)
+
+            irBuiltins.noWhenBranchMatchedExceptionSymbol -> IrCallImpl.fromSymbolDescriptor(
+                    expression.startOffset, expression.endOffset,
+                    context.ir.symbols.throwNoWhenBranchMatchedException.owner.returnType,
+                    context.ir.symbols.throwNoWhenBranchMatchedException,
+                    context.ir.symbols.throwNoWhenBranchMatchedException.owner.typeParameters.size,
+                    context.ir.symbols.throwNoWhenBranchMatchedException.owner.valueParameters.size)
+
+            else -> expression
         }
-
-        return expression
     }
 
     override fun visitTypeOperator(expression: IrTypeOperatorCall): IrExpression {
@@ -69,22 +77,6 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
 
     private fun ieee754EqualsSymbols(): List<IrSimpleFunctionSymbol> =
             irBuiltins.ieee754equalsFunByOperandType.values.toList()
-
-    private fun transformBuiltinOperator(expression: IrCall): IrExpression = when (expression.symbol) {
-        irBuiltins.eqeqSymbol, in ieee754EqualsSymbols() -> lowerEqeq(expression)
-
-        irBuiltins.eqeqeqSymbol -> lowerEqeqeq(expression)
-
-        irBuiltins.throwNpeSymbol -> IrCallImpl(expression.startOffset, expression.endOffset,
-                context.ir.symbols.ThrowNullPointerException.owner.returnType,
-                context.ir.symbols.ThrowNullPointerException)
-
-        irBuiltins.noWhenBranchMatchedExceptionSymbol -> IrCallImpl(expression.startOffset, expression.endOffset,
-                context.ir.symbols.ThrowNoWhenBranchMatchedException.owner.returnType,
-                context.ir.symbols.ThrowNoWhenBranchMatchedException)
-
-        else -> expression
-    }
 
     private fun lowerEqeqeq(expression: IrCall): IrExpression {
         val lhs = expression.getValueArgument(0)!!
@@ -137,7 +129,7 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
     }
 
     private fun inlinedClassHasDefaultEquals(irClass: IrClass): Boolean {
-        if (!irClass.descriptor.isInline) {
+        if (!irClass.isInline) {
             // Implicitly-inlined class, e.g. primitive one.
             return true
         }
@@ -145,11 +137,7 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
         val equals = irClass.simpleFunctions()
                 .single { it.name.asString() == "equals" && it.valueParameters.size == 1 && it.overrides(anyEquals) }
 
-        // Note: this is not absolutely correct for inline class from other module
-        // since custom equals implementation can be added after compilation but before linking.
-        // TODO: reimplement after inline classes get properly designed `equals` operator.
-        // see https://youtrack.jetbrains.com/issue/KT-26354.
-        return equals.descriptor.kind == CallableMemberDescriptor.Kind.SYNTHESIZED
+        return equals.origin == IrDeclarationOrigin.GENERATED_INLINE_CLASS_MEMBER
     }
 
     fun IrBuilderWithScope.genInlineClassEquals(
@@ -184,15 +172,20 @@ internal class BuiltinOperatorLowering(val context: Context) : FileLoweringPass,
 
     private fun IrBuilderWithScope.irEqeqNull(expression: IrExpression): IrExpression {
         val type = expression.type.makeNullable()
-        val primitiveBinaryTypeOrNull = type.computePrimitiveBinaryTypeOrNull()
-        return when (primitiveBinaryTypeOrNull) {
+        return when (val primitiveBinaryTypeOrNull = type.computePrimitiveBinaryTypeOrNull()) {
             null -> irEqeqeq(reinterpret(expression, type, irBuiltins.anyNType), irNull())
             PrimitiveBinaryType.POINTER -> irCall(symbols.areEqualByValue[PrimitiveBinaryType.POINTER]!!.owner).apply {
                 putValueArgument(0, reinterpret(expression, type, symbols.nativePtrType))
                 putValueArgument(1, reinterpret(irNull(), type, symbols.nativePtrType))
             }
-            else -> error("Nullable type ${type.toKotlinType()} is $primitiveBinaryTypeOrNull")
+            else -> error("Nullable type ${type.render()} is $primitiveBinaryTypeOrNull")
         }
+    }
+
+    private fun lowerCheckNotNull(expression: IrCall) = builder.at(expression).irBlock(resultType = expression.type) {
+        val temp = irTemporary(expression.getValueArgument(0)!!)
+        +irIfThen(context.irBuiltIns.unitType, irEqeqNull(irGet(temp)), irCall(symbols.throwNullPointerException))
+        +irGet(temp)
     }
 
     private fun IrBuilderWithScope.irLogicalAnd(lhs: IrExpression, rhs: IrExpression) = context.andand(lhs, rhs)

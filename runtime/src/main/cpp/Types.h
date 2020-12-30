@@ -25,6 +25,8 @@
 #endif
 
 #include <deque>
+#include <list>
+#include <map>
 #include <string>
 #include <set>
 #include <unordered_map>
@@ -50,6 +52,7 @@ typedef uint64_t KULong;
 typedef float   KFloat;
 typedef double  KDouble;
 typedef void*   KNativePtr;
+typedef KFloat __attribute__ ((__vector_size__ (16)))   KVector4f;
 
 typedef const void* KConstNativePtr;
 
@@ -70,10 +73,14 @@ template<class Value>
 using KStdUnorderedSet = std::unordered_set<Value,
   std::hash<Value>, std::equal_to<Value>,
   KonanAllocator<Value>>;
-template<class Value, class Compare>
+template<class Value, class Compare = std::less<Value>>
 using KStdOrderedSet = std::set<Value, Compare, KonanAllocator<Value>>;
+template<class Key, class Value, class Compare = std::less<Key>>
+using KStdOrderedMap = std::map<Key, Value, Compare, KonanAllocator<std::pair<const Key, Value>>>;
 template<class Value>
 using KStdVector = std::vector<Value, KonanAllocator<Value>>;
+template<class Value>
+using KStdList = std::list<Value, KonanAllocator<Value>>;
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,22 +88,28 @@ extern "C" {
 
 extern const TypeInfo* theAnyTypeInfo;
 extern const TypeInfo* theArrayTypeInfo;
+extern const TypeInfo* theBooleanArrayTypeInfo;
 extern const TypeInfo* theByteArrayTypeInfo;
 extern const TypeInfo* theCharArrayTypeInfo;
-extern const TypeInfo* theShortArrayTypeInfo;
+extern const TypeInfo* theDoubleArrayTypeInfo;
+extern const TypeInfo* theForeignObjCObjectTypeInfo;
 extern const TypeInfo* theIntArrayTypeInfo;
 extern const TypeInfo* theLongArrayTypeInfo;
+extern const TypeInfo* theNativePtrArrayTypeInfo;
 extern const TypeInfo* theFloatArrayTypeInfo;
-extern const TypeInfo* theDoubleArrayTypeInfo;
-extern const TypeInfo* theBooleanArrayTypeInfo;
+extern const TypeInfo* theForeignObjCObjectTypeInfo;
+extern const TypeInfo* theFreezableAtomicReferenceTypeInfo;
+extern const TypeInfo* theObjCObjectWrapperTypeInfo;
+extern const TypeInfo* theOpaqueFunctionTypeInfo;
+extern const TypeInfo* theShortArrayTypeInfo;
 extern const TypeInfo* theStringTypeInfo;
 extern const TypeInfo* theThrowableTypeInfo;
 extern const TypeInfo* theUnitTypeInfo;
-extern const TypeInfo* theForeignObjCObjectTypeInfo;
-extern const TypeInfo* theObjCObjectWrapperTypeInfo;
-extern const TypeInfo* theNativePtrArrayTypeInfo;
+extern const TypeInfo* theWorkerBoundReferenceTypeInfo;
+extern const TypeInfo* theCleanerImplTypeInfo;
 
 KBoolean IsInstance(const ObjHeader* obj, const TypeInfo* type_info) RUNTIME_PURE;
+KBoolean IsInstanceOfClassFast(const ObjHeader* obj, int32_t lo, int32_t hi) RUNTIME_PURE;
 void CheckCast(const ObjHeader* obj, const TypeInfo* type_info);
 KBoolean IsArray(KConstRef obj) RUNTIME_PURE;
 bool IsSubInterface(const TypeInfo* thiz, const TypeInfo* other) RUNTIME_PURE;

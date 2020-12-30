@@ -98,11 +98,11 @@ val counters = Array(COUNT) { AtomicInt(0) }
     val futures = Array(workers.size) { workerIndex ->
         workers[workerIndex].execute(TransferMode.SAFE, { null }) {
             // Here we processed termination request.
-            assertEquals(false, Worker.current!!.processQueue())
+            assertEquals(false, Worker.current.processQueue())
         }
     }
     workers.forEach {
-        it.executeAfter(1000*1000, {
+        it.executeAfter(1000*1000*1000, {
             println("DELAY EXECUTED")
             assert(false)
         }.freeze())

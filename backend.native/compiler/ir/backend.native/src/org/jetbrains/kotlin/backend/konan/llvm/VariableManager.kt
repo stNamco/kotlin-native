@@ -24,14 +24,16 @@ internal class VariableManager(val functionGenerationContext: FunctionGeneration
 
     inner class SlotRecord(val address: LLVMValueRef, val refSlot: Boolean, val isVar: Boolean) : Record {
         override fun load() : LLVMValueRef = functionGenerationContext.loadSlot(address, isVar)
-        override fun store(value: LLVMValueRef) = functionGenerationContext.storeAny(value, address, true)
+        override fun store(value: LLVMValueRef) {
+            functionGenerationContext.storeAny(value, address, true)
+        }
         override fun address() : LLVMValueRef = this.address
         override fun toString() = (if (refSlot) "refslot" else "slot") + " for ${address}"
     }
 
     inner class ParameterRecord(val address: LLVMValueRef, val refSlot: Boolean) : Record {
         override fun load() : LLVMValueRef = functionGenerationContext.loadSlot(address, false)
-        override fun store(value: LLVMValueRef) = throw Error("writing to parameter")
+        override fun store(value: LLVMValueRef) = functionGenerationContext.store(value, address)
         override fun address() : LLVMValueRef = this.address
         override fun toString() = (if (refSlot) "refslot" else "slot") + " for ${address}"
     }

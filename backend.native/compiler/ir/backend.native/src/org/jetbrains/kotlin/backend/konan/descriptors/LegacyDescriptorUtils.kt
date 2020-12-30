@@ -7,34 +7,18 @@ package org.jetbrains.kotlin.backend.konan.descriptors
 
 import org.jetbrains.kotlin.backend.common.atMostOne
 import org.jetbrains.kotlin.backend.konan.RuntimeNames
-import org.jetbrains.kotlin.backend.konan.binaryTypeIsReference
-import org.jetbrains.kotlin.backend.konan.isObjCClass
+import org.jetbrains.kotlin.builtins.konan.KonanBuiltIns
 import org.jetbrains.kotlin.descriptors.*
 import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptor
-import org.jetbrains.kotlin.builtins.konan.KonanBuiltIns
-import org.jetbrains.kotlin.descriptors.annotations.AnnotationDescriptorImpl
-import org.jetbrains.kotlin.descriptors.annotations.Annotations
-import org.jetbrains.kotlin.descriptors.impl.FunctionDescriptorImpl
-import org.jetbrains.kotlin.descriptors.konan.DeserializedKonanModuleOrigin
-import org.jetbrains.kotlin.descriptors.konan.konanModuleOrigin
-import org.jetbrains.kotlin.metadata.konan.KonanProtoBuf
+import org.jetbrains.kotlin.descriptors.impl.ModuleDescriptorImpl
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.name.Name
-import org.jetbrains.kotlin.resolve.DescriptorFactory
 import org.jetbrains.kotlin.resolve.OverridingUtil
-import org.jetbrains.kotlin.resolve.constants.StringValue
 import org.jetbrains.kotlin.resolve.checkers.ExpectedActualDeclarationChecker
 import org.jetbrains.kotlin.resolve.descriptorUtil.fqNameSafe
 import org.jetbrains.kotlin.resolve.descriptorUtil.module
 import org.jetbrains.kotlin.resolve.scopes.MemberScope
-import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedPropertyDescriptor
-import org.jetbrains.kotlin.serialization.deserialization.descriptors.DeserializedSimpleFunctionDescriptor
-import org.jetbrains.kotlin.serialization.konan.KonanPackageFragment
-import org.jetbrains.kotlin.types.KotlinType
 import org.jetbrains.kotlin.types.typeUtil.isNothing
 import org.jetbrains.kotlin.types.typeUtil.isUnit
-import org.jetbrains.kotlin.utils.addToStdlib.ifNotEmpty
-
 
 /**
  * Implementation of given method.
@@ -131,7 +115,7 @@ fun AnnotationDescriptor.getStringValueOrNull(name: String): String? {
     return constantValue?.value as String?
 }
 
-fun <T> AnnotationDescriptor.getArgumentValueOrNull(name: String): T? {
+inline fun <reified T> AnnotationDescriptor.getArgumentValueOrNull(name: String): T? {
     val constantValue = this.allValueArguments.entries.atMostOne {
         it.key.asString() == name
     }?.value
@@ -143,10 +127,13 @@ fun AnnotationDescriptor.getStringValue(name: String): String = this.getStringVa
 
 private fun getPackagesFqNames(module: ModuleDescriptor): Set<FqName> {
     val result = mutableSetOf<FqName>()
+    val packageFragmentProvider = (module as? ModuleDescriptorImpl)?.packageFragmentProviderForModuleContentWithoutDependencies
 
     fun getSubPackages(fqName: FqName) {
         result.add(fqName)
-        module.getSubPackagesOf(fqName) { true }.forEach { getSubPackages(it) }
+        val subPackages = packageFragmentProvider?.getSubPackagesOf(fqName) { true }
+                ?: module.getSubPackagesOf(fqName) { true }
+        subPackages.forEach { getSubPackages(it) }
     }
 
     getSubPackages(FqName.ROOT)
@@ -155,7 +142,7 @@ private fun getPackagesFqNames(module: ModuleDescriptor): Set<FqName> {
 
 fun ModuleDescriptor.getPackageFragments(): List<PackageFragmentDescriptor> =
         getPackagesFqNames(this).flatMap {
-            getPackage(it).fragments.filter { it.module == this }
+            getPackage(it).fragments.filter { it.module == this }.toSet()
         }
 
 val ClassDescriptor.enumEntries: List<ClassDescriptor>
@@ -171,88 +158,3 @@ internal val DeclarationDescriptor.isExpectMember: Boolean
 
 internal val DeclarationDescriptor.isSerializableExpectClass: Boolean
     get() = this is ClassDescriptor && ExpectedActualDeclarationChecker.shouldGenerateExpectClass(this)
-
-internal fun KotlinType?.createExtensionReceiver(owner: CallableDescriptor): ReceiverParameterDescriptor? =
-        DescriptorFactory.createExtensionReceiverParameterForCallable(
-                owner,
-                this,
-                Annotations.EMPTY
-        )
-
-internal fun FunctionDescriptorImpl.initialize(
-        extensionReceiverType: KotlinType?,
-        dispatchReceiverParameter: ReceiverParameterDescriptor?,
-        typeParameters: List<TypeParameterDescriptor>,
-        unsubstitutedValueParameters: List<ValueParameterDescriptor>,
-        unsubstitutedReturnType: KotlinType?,
-        modality: Modality?,
-        visibility: Visibility
-): FunctionDescriptorImpl = this.initialize(
-        extensionReceiverType.createExtensionReceiver(this),
-        dispatchReceiverParameter,
-        typeParameters,
-        unsubstitutedValueParameters,
-        unsubstitutedReturnType,
-        modality,
-        visibility
-)
-
-private fun sourceByIndex(descriptor: CallableMemberDescriptor, index: Int): SourceFile {
-    val fragment = descriptor.findPackage() as KonanPackageFragment
-    return fragment.sourceFileMap.sourceFile(index)
-}
-
-fun CallableMemberDescriptor.findSourceFile(): SourceFile {
-    val source = this.source.containingFile
-    if (source != SourceFile.NO_SOURCE_FILE)
-        return source
-    return when {
-        this is DeserializedSimpleFunctionDescriptor && proto.hasExtension(KonanProtoBuf.functionFile) -> sourceByIndex(
-                this, proto.getExtension(KonanProtoBuf.functionFile))
-        this is DeserializedPropertyDescriptor && proto.hasExtension(KonanProtoBuf.propertyFile) ->
-            sourceByIndex(
-                    this, proto.getExtension(KonanProtoBuf.propertyFile))
-        else -> TODO()
-    }
-}
-
-internal val DeclarationDescriptor.isFrozen: Boolean
-    get() = this.annotations.hasAnnotation(RuntimeNames.frozenAnnotation) ||
-            (this is org.jetbrains.kotlin.descriptors.ClassDescriptor
-                    // RTTI is used for non-reference type box or Objective-C object wrapper:
-                    && (!this.defaultType.binaryTypeIsReference() || this.isObjCClass()))
-
-internal val FunctionDescriptor.isTypedIntrinsic: Boolean
-    get() = this.annotations.hasAnnotation(RuntimeNames.typedIntrinsicAnnotation)
-
-// TODO: coalesce all our annotation value getters into fewer functions.
-fun getAnnotationValue(annotation: AnnotationDescriptor): String? {
-    return annotation.allValueArguments.values.ifNotEmpty {
-        val stringValue = single() as? StringValue
-        stringValue?.value
-    }
-}
-
-fun CallableMemberDescriptor.externalSymbolOrThrow(): String? {
-    this.annotations.findAnnotation(RuntimeNames.symbolNameAnnotation)?.let {
-        return getAnnotationValue(it)!!
-    }
-    if (this.annotations.hasAnnotation(RuntimeNames.objCMethodAnnotation)) return null
-
-    if (this.annotations.hasAnnotation(RuntimeNames.typedIntrinsicAnnotation)) return null
-
-    if (this.annotations.hasAnnotation(RuntimeNames.cCall)) return null
-
-    throw Error("external function ${this} must have @TypedIntrinsic, @SymbolName or @ObjCMethod annotation")
-}
-
-fun createAnnotation(
-        descriptor: ClassDescriptor,
-        vararg values: Pair<String, String>
-): AnnotationDescriptor = AnnotationDescriptorImpl(
-        descriptor.defaultType,
-        values.map { (name, value) -> Name.identifier(name) to StringValue(value) }.toMap(),
-        SourceElement.NO_SOURCE
-)
-
-val ModuleDescriptor.konanLibrary get() = (this.konanModuleOrigin as? DeserializedKonanModuleOrigin)?.library

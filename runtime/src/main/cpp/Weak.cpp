@@ -13,6 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include "Weak.h"
+
 #include "Memory.h"
 #include "Types.h"
 
@@ -23,6 +26,7 @@ struct WeakReferenceCounter {
   ObjHeader header;
   KRef referred;
   KInt lock;
+  KInt cookie;
 };
 
 inline WeakReferenceCounter* asWeakReferenceCounter(ObjHeader* obj) {
@@ -49,25 +53,29 @@ extern "C" {
 
 OBJ_GETTER(makeWeakReferenceCounter, void*);
 OBJ_GETTER(makeObjCWeakReferenceImpl, void*);
+OBJ_GETTER(makePermanentWeakReferenceImpl, ObjHeader*);
 
 // See Weak.kt for implementation details.
 // Retrieve link on the counter object.
 OBJ_GETTER(Konan_getWeakReferenceImpl, ObjHeader* referred) {
-  MetaObjHeader* meta = referred->meta_object();
+    if (referred->permanent()) {
+        RETURN_RESULT_OF(makePermanentWeakReferenceImpl, referred);
+    }
 
 #if KONAN_OBJC_INTEROP
   if (IsInstance(referred, theObjCObjectWrapperTypeInfo)) {
-    RETURN_RESULT_OF(makeObjCWeakReferenceImpl, meta->associatedObject_);
+      RETURN_RESULT_OF(makeObjCWeakReferenceImpl, referred->GetAssociatedObject());
   }
 #endif // KONAN_OBJC_INTEROP
 
-  if (meta->counter_ == nullptr) {
-     ObjHolder counterHolder;
-     // Cast unneeded, just to emphasize we store an object reference as void*.
-     ObjHeader* counter = makeWeakReferenceCounter(reinterpret_cast<void*>(referred), counterHolder.slot());
-     UpdateHeapRefIfNull(&meta->counter_, counter);
+  ObjHeader** weakCounterLocation = referred->GetWeakCounterLocation();
+  if (*weakCounterLocation == nullptr) {
+      ObjHolder counterHolder;
+      // Cast unneeded, just to emphasize we store an object reference as void*.
+      ObjHeader* counter = makeWeakReferenceCounter(reinterpret_cast<void*>(referred), counterHolder.slot());
+      UpdateHeapRefIfNull(weakCounterLocation, counter);
   }
-  RETURN_OBJ(meta->counter_);
+  RETURN_OBJ(*weakCounterLocation);
 }
 
 // Materialize a weak reference to either null or the real reference.
@@ -76,8 +84,8 @@ OBJ_GETTER(Konan_WeakReferenceCounter_get, ObjHeader* counter) {
 #if KONAN_NO_THREADS
   RETURN_OBJ(*referredAddress);
 #else
-  int32_t* lockAddress = &asWeakReferenceCounter(counter)->lock;
-  RETURN_RESULT_OF(ReadHeapRefLocked, referredAddress, lockAddress);
+  auto* weakCounter = asWeakReferenceCounter(counter);
+  RETURN_RESULT_OF(ReadHeapRefLocked, referredAddress,  &weakCounter->lock,  &weakCounter->cookie);
 #endif
 }
 

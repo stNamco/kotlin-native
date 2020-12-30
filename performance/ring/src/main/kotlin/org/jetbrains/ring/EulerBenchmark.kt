@@ -70,10 +70,6 @@ open class EulerBenchmark {
             for (j in minDiv..maxDiv) {
                 if (i % j == 0L) {
                     val res = i / j
-                    // Without toLong() here we have a real nightmare...
-                    // in is resolved to Iterable<Int>.contains(Long)
-                    // which has O(N) complexity and always gives false
-                    // See KT-6978, KT-6950, KT-6361
                     if (res in minDiv.toLong()..maxDiv.toLong()) {
                         return i
                     }
@@ -155,7 +151,6 @@ open class EulerBenchmark {
 
     data class Children(val left: Int, val right: Int)
 
-    
     //Benchmark
     fun problem14(): List<Int> {
         // Simplified problem is solved here: it's not allowed to leave the interval [0..BENCHMARK_SIZE) inside a number chain

@@ -30,6 +30,12 @@ internal val CValue<CXType>.kind: CXTypeKind get() = this.useContents { kind }
 
 internal val CValue<CXCursor>.kind: CXCursorKind get() = this.useContents { kind }
 
+internal val CValue<CXCursor>.type: CValue<CXType> get() = clang_getCursorType(this)
+internal val CValue<CXCursor>.spelling: String get() = clang_getCursorSpelling(this).convertAndDispose()
+internal val CValue<CXType>.name: String get() = clang_getTypeSpelling(this).convertAndDispose()
+internal val CXTypeKind.spelling: String get() = clang_getTypeKindSpelling(this).convertAndDispose()
+internal val CXCursorKind.spelling: String get() = clang_getCursorKindSpelling(this).convertAndDispose()
+
 internal fun CValue<CXString>.convertAndDispose(): String {
     try {
         return clang_getCString(this)!!.toKString()
@@ -94,7 +100,7 @@ internal fun parseTranslationUnit(
         )
 
         if (errorCode != CXErrorCode.CXError_Success) {
-            val copiedSourceFile = sourceFile.copyTo(createTempFile(suffix = sourceFile.name), overwrite = true)
+            val copiedSourceFile = sourceFile.copyTo(Files.createTempFile(null, sourceFile.name).toFile(), overwrite = true)
 
             error("""
                 clang_parseTranslationUnit2 failed with $errorCode;
@@ -201,15 +207,19 @@ fun StructDef.fieldsHaveDefaultAlignment(): Boolean {
     return true
 }
 
-internal fun CValue<CXCursor>.isLeaf(): Boolean {
-    var hasChildren = false
+internal fun CValue<CXCursor>.hasExpressionChild(): Boolean {
+    var result = false
 
-    visitChildren(this) { _, _ ->
-        hasChildren = true
-        CXChildVisitResult.CXChildVisit_Break
+    visitChildren(this) { cursor, _ ->
+        if (clang_isExpression(cursor.kind) != 0) {
+            result = true
+            CXChildVisitResult.CXChildVisit_Break
+        } else {
+            CXChildVisitResult.CXChildVisit_Continue
+        }
     }
 
-    return !hasChildren
+    return result
 }
 
 internal fun List<String>.toNativeStringArray(scope: AutofreeScope): CArrayPointer<CPointerVar<ByteVar>> {
@@ -223,7 +233,7 @@ val Compilation.preambleLines: List<String>
 
 internal fun Appendable.appendPreamble(compilation: Compilation) = this.apply {
     compilation.preambleLines.forEach {
-        this.appendln(it)
+        this.appendLine(it)
     }
 }
 
@@ -231,7 +241,7 @@ internal fun Appendable.appendPreamble(compilation: Compilation) = this.apply {
  * Creates temporary source file which includes the library.
  */
 internal fun Compilation.createTempSource(): File {
-    val result = createTempFile(suffix = ".${language.sourceFileExtension}")
+    val result = Files.createTempFile(null, ".${language.sourceFileExtension}").toFile()
     result.deleteOnExit()
 
     result.bufferedWriter().use { writer ->
@@ -253,6 +263,11 @@ fun Compilation.copy(
         language = language
 )
 
+// Clang-8 crashes when consuming a precompiled header built with -fmodule-map-file argument (see KT-34467).
+// We ignore this argument when building a pch to workaround this crash.
+fun Compilation.copyWithArgsForPCH(): Compilation =
+        copy(compilerArgs = compilerArgs.filterNot { it.startsWith("-fmodule-map-file") })
+
 data class CompilationImpl(
         override val includes: List<String>,
         override val additionalPreambleLines: List<String>,
@@ -267,7 +282,7 @@ data class CompilationImpl(
  */
 fun Compilation.precompileHeaders(): CompilationWithPCH = withIndex { index ->
     val options = CXTranslationUnit_ForSerialization
-    val translationUnit = this.parse(index, options)
+    val translationUnit = copyWithArgsForPCH().parse(index, options)
     try {
         translationUnit.ensureNoCompileErrors()
         withPrecompiledHeader(translationUnit)
@@ -277,7 +292,7 @@ fun Compilation.precompileHeaders(): CompilationWithPCH = withIndex { index ->
 }
 
 internal fun Compilation.withPrecompiledHeader(translationUnit: CXTranslationUnit): CompilationWithPCH {
-    val precompiledHeader = createTempFile(suffix = ".pch").apply { this.deleteOnExit() }
+    val precompiledHeader = Files.createTempFile(null, ".pch").toFile().apply { this.deleteOnExit() }
     clang_saveTranslationUnit(translationUnit, precompiledHeader.absolutePath, 0)
 
     return CompilationWithPCH(this.compilerArgs, precompiledHeader.absolutePath, this.language)
@@ -325,7 +340,7 @@ fun List<List<String>>.mapFragmentIsCompilable(originalLibrary: CompilationWithP
                     fragmentsToCheck.forEach {
                         it.value.forEach {
                             assert(!it.contains('\n'))
-                            writer.appendln(it)
+                            writer.appendLine(it)
                         }
                     }
                 }
@@ -424,7 +439,7 @@ internal fun indexTranslationUnit(index: CXIndex, translationUnit: CXTranslation
             val indexAction = clang_IndexAction_create(index)
             try {
                 val result = clang_indexTranslationUnit(indexAction, clientData,
-                        indexerCallbacks.ptr, IndexerCallbacks.size.toInt(), options, translationUnit)
+                        indexerCallbacks.ptr, sizeOf<IndexerCallbacks>().toInt(), options, translationUnit)
 
                 if (result != 0) {
                     throw Error("clang_indexTranslationUnit returned $result")
@@ -725,12 +740,10 @@ private fun createVfsOverlayFileContents(virtualPathToReal: Map<Path, Path>): By
 fun createVfsOverlayFile(virtualPathToReal: Map<Path, Path>): Path {
     val bytes = createVfsOverlayFileContents(virtualPathToReal)
 
-    return createTempFile(prefix = "konan", suffix = ".vfsoverlay").apply {
-        bufferedWriter().use {
-            writeBytes(bytes)
-        }
-        deleteOnExit()
-    }.toPath()
+    return Files.createTempFile("konan", ".vfsoverlay").also {
+        Files.write(it, bytes)
+        it.toFile().deleteOnExit()
+    }
 }
 
 tailrec fun Type.unwrapTypedefs(): Type = if (this is Typedef) {

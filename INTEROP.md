@@ -36,7 +36,7 @@ Install libgit2 and prepare stubs for the git library:
 ```bash
 
 cd samples/gitchurn
-../../dist/bin/cinterop -def src/main/c_interop/libgit2.def \
+../../dist/bin/cinterop -def src/nativeInterop/cinterop/libgit2.def \
  -compiler-option -I/usr/local/include -o libgit2
 ```
 
@@ -47,7 +47,7 @@ Compile the client:
 <div class="sample" markdown="1" theme="idea" mode="shell">
 
 ```bash
-../../dist/bin/kotlinc src/main/kotlin \
+../../dist/bin/kotlinc src/gitChurnMain/kotlin \
  -library libgit2 -o GitChurn
 ```
 
@@ -131,7 +131,7 @@ are included into the bindings.
 
 The globs are applied to the header paths relative to the appropriate include
 path elements, e.g. `time.h` or `curl/curl.h`. So if the library is usually
-included with `#include <SomeLbrary/Header.h>`, then it would probably be
+included with `#include <SomeLibrary/Header.h>`, then it would probably be
 correct to filter headers with
 
 <div class="sample" markdown="1" theme="idea" mode="c">

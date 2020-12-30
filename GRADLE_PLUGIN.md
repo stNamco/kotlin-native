@@ -235,7 +235,7 @@ With the `kotlin-platform-native` plugin interop with a native library can be de
 components.main {
     dependencies {
         cinterop('mystdio') {
-            // Сinterop configuration.
+            // Cinterop configuration.
         }
     }
 }
@@ -253,7 +253,7 @@ kotlin {
     macosX64 {
         compilations.main.cinterops {
             mystdio {
-                // Сinterop configuration.
+                // Cinterop configuration.
             }
         }
     }
@@ -617,7 +617,7 @@ dependencies {
 
 </div>
 
-The the [example project](https://github.com/ilmat192/kotlin-native-serialization-sample) for details.
+The [example project](https://github.com/ilmat192/kotlin-native-serialization-sample) for details.
 
 ### DSL example
 

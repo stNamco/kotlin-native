@@ -4,29 +4,27 @@
  */
 package org.jetbrains.kotlin.native.interop.gen
 
+import org.jetbrains.kotlin.native.interop.gen.jvm.GenerationMode
 import org.jetbrains.kotlin.native.interop.gen.jvm.InteropConfiguration
 import org.jetbrains.kotlin.native.interop.gen.jvm.KotlinPlatform
 import org.jetbrains.kotlin.native.interop.indexer.*
 
 /**
+ * Components that are not passed via StubIr but required for bridge generation.
+ */
+class BridgeGenerationInfo(val cGlobalName: String, val typeInfo: TypeInfo)
+
+/**
  * Additional components that are required to generate bridges.
+ * TODO: Metadata-based interop should not depend on these components.
  */
 interface BridgeGenerationComponents {
 
-    class GlobalSetterBridgeInfo(
-            val cGlobalName: String,
-            val typeInfo: TypeInfo
-    )
+    val setterToBridgeInfo: Map<PropertyAccessor.Setter, BridgeGenerationInfo>
 
-    class GlobalGetterBridgeInfo(
-            val cGlobalName: String,
-            val typeInfo: TypeInfo,
-            val isArray: Boolean
-    )
+    val getterToBridgeInfo: Map<PropertyAccessor.Getter, BridgeGenerationInfo>
 
-    val setterToBridgeInfo: Map<PropertyAccessor.Setter, GlobalSetterBridgeInfo>
-
-    val getterToBridgeInfo: Map<PropertyAccessor.Getter, GlobalGetterBridgeInfo>
+    val arrayGetterInfo: Map<PropertyAccessor.Getter, BridgeGenerationInfo>
 
     val enumToTypeMirror: Map<ClassStub.Enum, TypeMirror>
 
@@ -35,13 +33,15 @@ interface BridgeGenerationComponents {
     val cStringParameters: Set<FunctionParameterStub>
 }
 
-class BridgeGenerationComponentsBuilder(
-        val getterToBridgeInfo: MutableMap<PropertyAccessor.Getter, BridgeGenerationComponents.GlobalGetterBridgeInfo> = mutableMapOf(),
-        val setterToBridgeInfo: MutableMap<PropertyAccessor.Setter, BridgeGenerationComponents.GlobalSetterBridgeInfo> = mutableMapOf(),
-        val enumToTypeMirror: MutableMap<ClassStub.Enum, TypeMirror> = mutableMapOf(),
-        val wCStringParameters: MutableSet<FunctionParameterStub> = mutableSetOf(),
-        val cStringParameters: MutableSet<FunctionParameterStub> = mutableSetOf()
-) {
+class BridgeGenerationComponentsBuilder {
+
+    val getterToBridgeInfo = mutableMapOf<PropertyAccessor.Getter, BridgeGenerationInfo>()
+    val setterToBridgeInfo = mutableMapOf<PropertyAccessor.Setter, BridgeGenerationInfo>()
+    val arrayGetterBridgeInfo = mutableMapOf<PropertyAccessor.Getter, BridgeGenerationInfo>()
+    val enumToTypeMirror = mutableMapOf<ClassStub.Enum, TypeMirror>()
+    val wCStringParameters = mutableSetOf<FunctionParameterStub>()
+    val cStringParameters = mutableSetOf<FunctionParameterStub>()
+
     fun build(): BridgeGenerationComponents = object : BridgeGenerationComponents {
         override val getterToBridgeInfo =
                 this@BridgeGenerationComponentsBuilder.getterToBridgeInfo.toMap()
@@ -57,6 +57,31 @@ class BridgeGenerationComponentsBuilder(
 
         override val cStringParameters: Set<FunctionParameterStub> =
                 this@BridgeGenerationComponentsBuilder.cStringParameters.toSet()
+
+        override val arrayGetterInfo: Map<PropertyAccessor.Getter, BridgeGenerationInfo> =
+                this@BridgeGenerationComponentsBuilder.arrayGetterBridgeInfo.toMap()
+    }
+}
+
+/**
+ * Components that are not passed via StubIr but required for generation of wrappers.
+ */
+class WrapperGenerationInfo(val global: GlobalDecl, val passViaPointer: Boolean = false)
+
+interface WrapperGenerationComponents {
+    val getterToWrapperInfo: Map<PropertyAccessor.Getter.ExternalGetter, WrapperGenerationInfo>
+    val setterToWrapperInfo: Map<PropertyAccessor.Setter.ExternalSetter, WrapperGenerationInfo>
+}
+
+class WrapperGenerationComponentsBuilder {
+
+    val getterToWrapperInfo = mutableMapOf<PropertyAccessor.Getter.ExternalGetter, WrapperGenerationInfo>()
+    val setterToWrapperInfo = mutableMapOf<PropertyAccessor.Setter.ExternalSetter, WrapperGenerationInfo>()
+
+    fun build(): WrapperGenerationComponents = object : WrapperGenerationComponents {
+        override val getterToWrapperInfo = this@WrapperGenerationComponentsBuilder.getterToWrapperInfo.toMap()
+
+        override val setterToWrapperInfo = this@WrapperGenerationComponentsBuilder.setterToWrapperInfo.toMap()
     }
 }
 
@@ -76,6 +101,13 @@ interface StubsBuildingContext {
 
     val platform: KotlinPlatform
 
+    /**
+     * In some cases StubIr should be different for metadata and sourcecode modes.
+     * For example, it is impossible to represent call to superclass constructor in
+     * metadata directly and arguments should be passed via annotations instead.
+     */
+    val generationMode: GenerationMode
+
     fun isStrictEnum(enumDef: EnumDef): Boolean
 
     val macroConstantsByName: Map<String, MacroDef>
@@ -86,9 +118,13 @@ interface StubsBuildingContext {
 
     val bridgeComponentsBuilder: BridgeGenerationComponentsBuilder
 
+    val wrapperComponentsBuilder: WrapperGenerationComponentsBuilder
+
     fun getKotlinClassFor(objCClassOrProtocol: ObjCClassOrProtocol, isMeta: Boolean = false): Classifier
 
     fun getKotlinClassForPointed(structDecl: StructDecl): Classifier
+
+    fun isOverloading(func: FunctionDecl): Boolean
 }
 
 /**
@@ -106,10 +142,14 @@ class StubsBuildingContextImpl(
 
     override val configuration: InteropConfiguration = stubIrContext.configuration
     override val platform: KotlinPlatform = stubIrContext.platform
+    override val generationMode: GenerationMode = stubIrContext.generationMode
     val imports: Imports = stubIrContext.imports
     private val nativeIndex: NativeIndex = stubIrContext.nativeIndex
 
     private var theCounter = 0
+
+    private val uniqFunctions = mutableSetOf<String>()
+    override fun isOverloading(func: FunctionDecl) = !uniqFunctions.add(func.name) // TODO: params & return type.
 
     override fun generateNextUniqueId(prefix: String) =
             prefix + pkgName.replace('.', '_') + theCounter++
@@ -195,7 +235,11 @@ class StubsBuildingContextImpl(
         get() = stubIrContext.getKotlinName(this)
 
     override fun tryCreateIntegralStub(type: Type, value: Long): IntegralConstantStub? {
-        val integerType = type.unwrapTypedefs() as? IntegerType ?: return null
+        val integerType = when (val unwrappedType = type.unwrapTypedefs()) {
+            is IntegerType -> unwrappedType
+            CharType -> IntegerType(1, true, "char")
+            else -> return null
+        }
         val size = integerType.size
         if (size != 1 && size != 2 && size != 4 && size != 8) return null
         return IntegralConstantStub(value, size, declarationMapper.isMappedToSigned(integerType))
@@ -210,6 +254,8 @@ class StubsBuildingContextImpl(
 
     override val bridgeComponentsBuilder = BridgeGenerationComponentsBuilder()
 
+    override val wrapperComponentsBuilder = WrapperGenerationComponentsBuilder()
+
     override fun getKotlinClassFor(objCClassOrProtocol: ObjCClassOrProtocol, isMeta: Boolean): Classifier {
         return declarationMapper.getKotlinClassFor(objCClassOrProtocol, isMeta)
     }
@@ -223,7 +269,8 @@ class StubsBuildingContextImpl(
 data class StubIrBuilderResult(
         val stubs: SimpleStubContainer,
         val declarationMapper: DeclarationMapper,
-        val bridgeGenerationComponents: BridgeGenerationComponents
+        val bridgeGenerationComponents: BridgeGenerationComponents,
+        val wrapperGenerationComponents: WrapperGenerationComponents
 )
 
 /**
@@ -285,7 +332,8 @@ class StubIrBuilder(private val context: StubIrContext) {
         return StubIrBuilderResult(
                 stubs,
                 buildingContext.declarationMapper,
-                buildingContext.bridgeComponentsBuilder.build()
+                buildingContext.bridgeComponentsBuilder.build(),
+                buildingContext.wrapperComponentsBuilder.build()
         )
     }
 
@@ -315,7 +363,7 @@ class StubIrBuilder(private val context: StubIrContext) {
 
     private fun generateStubsForFunction(func: FunctionDecl) {
         try {
-            addStubs(FunctionStubBuilder(buildingContext, func).build())
+            addStubs(FunctionStubBuilder(buildingContext, func, skipOverloads = true).build())
         } catch (e: Throwable) {
             context.log("Warning: cannot generate stubs for function ${func.name}")
         }

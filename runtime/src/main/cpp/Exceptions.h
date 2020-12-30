@@ -24,12 +24,16 @@ extern "C" {
 #endif
 
 // Returns current stacktrace as Array<String>.
-OBJ_GETTER0(GetCurrentStackTrace);
+OBJ_GETTER0(Kotlin_getCurrentStackTrace);
 
 OBJ_GETTER(GetStackTraceStrings, KConstRef stackTrace);
 
+OBJ_GETTER(Kotlin_setUnhandledExceptionHook, KRef hook);
+
 // Throws arbitrary exception.
 void ThrowException(KRef exception);
+
+void OnUnhandledException(KRef throwable);
 
 RUNTIME_NORETURN void TerminateWithUnhandledException(KRef exception);
 
@@ -66,5 +70,8 @@ void PrintThrowable(KRef);
 #ifdef __cplusplus
 } // extern "C"
 #endif
+
+// It's not always safe to extract SourceInfo during unhandled exception termination.
+void DisallowSourceInfo();
 
 #endif // RUNTIME_NAMES_H

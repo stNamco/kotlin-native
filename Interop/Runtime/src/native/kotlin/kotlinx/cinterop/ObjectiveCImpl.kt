@@ -22,6 +22,7 @@ import kotlin.native.internal.ExportTypeInfo
 import kotlin.native.internal.ExportForCppRuntime
 import kotlin.native.internal.TypedIntrinsic
 import kotlin.native.internal.IntrinsicType
+import kotlin.native.internal.FilterExceptions
 
 interface ObjCObject
 interface ObjCClass : ObjCObject
@@ -61,6 +62,7 @@ private fun ObjCObjectBase.superInitCheck(superInitCallResult: ObjCObject?) {
 
 internal fun <T : Any?> Any?.uncheckedCast(): T = @Suppress("UNCHECKED_CAST") (this as T)
 
+// Note: if this is called for non-frozen object on a wrong worker, the program will terminate.
 @SymbolName("Kotlin_Interop_refFromObjC")
 external fun <T> interpretObjCPointerOrNull(objcPtr: NativePtr): T?
 
@@ -73,6 +75,7 @@ external fun Any?.objcPtr(): NativePtr
 @SymbolName("Kotlin_Interop_createKotlinObjectHolder")
 external fun createKotlinObjectHolder(any: Any?): NativePtr
 
+// Note: if this is called for non-frozen underlying ref on a wrong worker, the program will terminate.
 inline fun <reified T : Any> unwrapKotlinObjectHolder(holder: Any?): T {
     return unwrapKotlinObjectHolderImpl(holder!!.objcPtr()) as T
 }
@@ -82,16 +85,20 @@ inline fun <reified T : Any> unwrapKotlinObjectHolder(holder: Any?): T {
 external internal fun unwrapKotlinObjectHolderImpl(ptr: NativePtr): Any
 
 class ObjCObjectVar<T>(rawPtr: NativePtr) : CVariable(rawPtr) {
+    @Deprecated("Use sizeOf<T>() or alignOf<T>() instead.")
+    @Suppress("DEPRECATION")
     companion object : CVariable.Type(pointerSize.toLong(), pointerSize)
 }
 
 class ObjCNotImplementedVar<T : Any?>(rawPtr: NativePtr) : CVariable(rawPtr) {
+    @Deprecated("Use sizeOf<T>() or alignOf<T>() instead.")
+    @Suppress("DEPRECATION")
     companion object : CVariable.Type(pointerSize.toLong(), pointerSize)
 }
 
 var <T : Any?> ObjCNotImplementedVar<T>.value: T
     get() = TODO()
-    set(value) = TODO()
+    set(_) = TODO()
 
 typealias ObjCStringVarOf<T> = ObjCNotImplementedVar<T>
 typealias ObjCBlockVar<T> = ObjCNotImplementedVar<T>
@@ -207,6 +214,7 @@ external fun objc_autoreleasePoolPush(): NativePtr
 external fun objc_autoreleasePoolPop(ptr: NativePtr)
 
 @SymbolName("Kotlin_objc_allocWithZone")
+@FilterExceptions
 private external fun objc_allocWithZone(clazz: NativePtr): NativePtr
 
 @SymbolName("Kotlin_objc_retain")

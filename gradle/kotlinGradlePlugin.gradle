@@ -16,6 +16,7 @@ project.buildscript.repositories {
     maven {
         url 'https://cache-redirector.jetbrains.com/maven-central'
     }
+    mavenCentral()
 }
 
 project.buildscript.dependencies {
@@ -25,6 +26,7 @@ configurations {
     kotlinCompilerClasspath
 }
 project.repositories {
+    maven { url buildKotlinCompilerRepo }
     maven {
         url kotlinCompilerRepo
     }

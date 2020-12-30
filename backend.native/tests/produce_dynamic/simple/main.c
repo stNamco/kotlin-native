@@ -9,6 +9,21 @@ void errorHandler(const char* str) {
   printf("Error handler: %s\n", str);
 }
 
+void testVector128() {
+    int __attribute__ ((__vector_size__ (16))) v4f = __ kotlin.root.getVector128();
+    printf("getVector128 = (%d, %d, %d, %d)\n",  v4f[0],  v4f[1],  v4f[2],  v4f[3]);
+}
+
+// See https://github.com/JetBrains/kotlin-native/issues/3952
+void testGH3952() {
+    T_(gh3952_nested_sync_NestedSync) good = __ kotlin.root.gh3952.nested.sync.NestedSync.NestedSync();
+
+    T_(gh3952_sync_PlainSync) alsoGood = __ kotlin.root.gh3952.sync.PlainSync.PlainSync();
+
+    __ DisposeStablePointer(good.pinned);
+    __ DisposeStablePointer(alsoGood.pinned);
+}
+
 int main(void) {
     T_(Singleton) singleton = __ kotlin.root.Singleton._instance();
     T_(Base) base = __ kotlin.root.Base.Base();
@@ -21,6 +36,11 @@ int main(void) {
     T_(Enum) enum1 = __ kotlin.root.Enum.HUNDRED.get();
     T_(Codeable) object1 = __ kotlin.root.get_an_object();
     T_(Data) data = __ kotlin.root.getMutable();
+    T_(kotlin_Int) nullableInt = __ createNullableInt(77);
+    T_(kotlin_Unit) nullableUnit = __ createNullableUnit();
+    T_(kotlin_Int) nullableIntNull = { .pinned = 0 };
+    T_(kotlin_Unit) nullableUnitNull = { .pinned = 0 };
+    T_(EnumWithInterface) enum2 = __ kotlin.root.EnumWithInterface.ZERO.get();
 
     const char* string1 = __ kotlin.root.getString();
     const char* string2 = __ kotlin.root.Singleton.toString(singleton);
@@ -44,6 +64,7 @@ int main(void) {
     printf("RW property is %d\n", __ kotlin.root.Child.get_rwProperty(child));
 
     printf("enum100 = %d\n",  __ kotlin.root.Enum.get_code(enum1));
+    printf("enum42 = %d\n",  __ kotlin.root.EnumWithInterface.foo(enum2));
 
     printf("object = %d\n",  __ kotlin.root.Codeable.asCode(object1));
 
@@ -51,11 +72,19 @@ int main(void) {
 
     printf("mutable = %s\n",  string3);
 
-    topLevelFunctionVoidFromC(42, 0);
-    __ kotlin.root.topLevelFunctionVoid(42, 0);
+    topLevelFunctionVoidFromC(42, nullableInt, nullableUnit, 0);
+    __ kotlin.root.topLevelFunctionVoid(42, nullableInt, nullableUnit, 0);
     printf("topLevel = %d %d\n", topLevelFunctionFromC(780, 3), __ kotlin.root.topLevelFunctionFromCShort(5, 2));
 
     __ kotlin.root.useInlineClasses(42, "bar", base);
+
+    __ kotlin.root.testNullableWithNulls(nullableIntNull, nullableUnitNull);
+
+    printf("IsInstance1 = %s\n", __ IsInstance(singleton.pinned, __ kotlin.root.Singleton._type()) ? "PASS" : "FAIL");
+    printf("IsInstance2 = %s\n", !(__ IsInstance(singleton.pinned, __ kotlin.root.Codeable._type())) ? "PASS" : "FAIL");
+
+    testVector128();
+    testGH3952();
 
     __ DisposeStablePointer(singleton.pinned);
     __ DisposeString(string1);
@@ -69,6 +98,8 @@ int main(void) {
     __ DisposeStablePointer(impl2.pinned);
     __ DisposeStablePointer(enum1.pinned);
     __ DisposeStablePointer(object1.pinned);
+    __ DisposeStablePointer(nullableInt.pinned);
+    __ DisposeStablePointer(enum2.pinned);
 
     __ kotlin.root.setCErrorHandler(&errorHandler);
     __ kotlin.root.throwException();

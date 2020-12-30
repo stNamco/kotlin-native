@@ -153,7 +153,7 @@ extern "C" bool AddressToSymbol(const void* address, char* resultBuffer, size_t 
 namespace {
 
 static void* mapModuleFile(HMODULE hModule) {
-  int bufferLength = 64;
+  DWORD bufferLength = 64;
   wchar_t* buffer = nullptr;
   for (;;) {
     auto newBuffer = (wchar_t*)konanAllocMemory(sizeof(wchar_t) * bufferLength);
@@ -315,8 +315,11 @@ extern "C" bool AddressToSymbol(const void* address, char* resultBuffer, size_t 
   if (theExeSymbolTable == nullptr) {
     // Note: do not protecting the lazy initialization by critical sections for simplicity;
     // this doesn't have any serious consequences.
-    theExeSymbolTable = konanConstructInstance<SymbolTable>(
-        GetModuleHandle(nullptr));
+    HMODULE hModule = nullptr;
+    int rv = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+               reinterpret_cast<LPCWSTR>(&AddressToSymbol), &hModule);
+    RuntimeAssert(rv != 0, "GetModuleHandleExW fails");
+    theExeSymbolTable = konanConstructInstance<SymbolTable>(hModule);
   }
   return theExeSymbolTable->functionAddressToSymbol(address, resultBuffer, resultBufferSize);
 }

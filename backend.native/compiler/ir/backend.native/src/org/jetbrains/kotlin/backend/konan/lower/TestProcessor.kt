@@ -5,18 +5,13 @@
 
 package org.jetbrains.kotlin.backend.konan.lower
 
-import org.jetbrains.kotlin.backend.common.descriptors.WrappedClassConstructorDescriptor
-import org.jetbrains.kotlin.backend.common.descriptors.WrappedClassDescriptor
-import org.jetbrains.kotlin.backend.common.descriptors.WrappedSimpleFunctionDescriptor
-import org.jetbrains.kotlin.backend.common.ir.addFakeOverrides
-import org.jetbrains.kotlin.backend.common.ir.createDispatchReceiverParameter
-import org.jetbrains.kotlin.backend.common.ir.createParameterDeclarations
-import org.jetbrains.kotlin.backend.common.ir.simpleFunctions
+import org.jetbrains.kotlin.backend.common.ir.*
 import org.jetbrains.kotlin.backend.common.lower.createIrBuilder
 import org.jetbrains.kotlin.backend.common.reportWarning
 import org.jetbrains.kotlin.backend.konan.Context
 import org.jetbrains.kotlin.backend.konan.descriptors.isAbstract
 import org.jetbrains.kotlin.backend.konan.descriptors.synthesizedName
+import org.jetbrains.kotlin.backend.konan.getIncludedLibraryDescriptors
 import org.jetbrains.kotlin.backend.konan.ir.typeWithStarProjections
 import org.jetbrains.kotlin.backend.konan.ir.typeWithoutArguments
 import org.jetbrains.kotlin.backend.konan.reportCompilationError
@@ -34,6 +29,7 @@ import org.jetbrains.kotlin.ir.symbols.impl.IrConstructorSymbolImpl
 import org.jetbrains.kotlin.ir.symbols.impl.IrSimpleFunctionSymbolImpl
 import org.jetbrains.kotlin.ir.types.*
 import org.jetbrains.kotlin.ir.util.*
+import org.jetbrains.kotlin.ir.util.addChild
 import org.jetbrains.kotlin.ir.visitors.IrElementVisitorVoid
 import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
 import org.jetbrains.kotlin.load.kotlin.PackagePartClassUtils
@@ -105,9 +101,9 @@ internal class TestProcessor (val context: Context) {
                             it.function.endOffset,
                             registerTestCase.valueParameters[1].type,
                             it.function.symbol,
-                            it.function.descriptor,
                             typeArgumentsCount = 0,
-                            valueArgumentsCount = 0))
+                            valueArgumentsCount = 0,
+                            reflectionTarget = null))
                     putValueArgument(2, irBoolean(it.ignored))
                 }
             } else {
@@ -126,9 +122,9 @@ internal class TestProcessor (val context: Context) {
                             it.function.endOffset,
                             registerFunction.valueParameters[1].type,
                             it.function.symbol,
-                            it.function.descriptor,
                             typeArgumentsCount = 0,
-                            valueArgumentsCount = 0))
+                            valueArgumentsCount = 0,
+                            reflectionTarget = null))
                 }
             }
         }
@@ -336,21 +332,24 @@ internal class TestProcessor (val context: Context) {
      */
     private fun buildObjectGetter(objectSymbol: IrClassSymbol,
                                   owner: IrClass,
-                                  getterName: Name) = WrappedSimpleFunctionDescriptor().let { descriptor ->
+                                  getterName: Name): IrSimpleFunction =
         IrFunctionImpl(
                 owner.startOffset, owner.endOffset,
                 TEST_SUITE_GENERATED_MEMBER,
-                IrSimpleFunctionSymbolImpl(descriptor),
+                IrSimpleFunctionSymbolImpl(),
                 getterName,
-                Visibilities.PROTECTED,
+                DescriptorVisibilities.PROTECTED,
                 Modality.FINAL,
                 objectSymbol.typeWithStarProjections,
                 isInline = false,
                 isExternal = false,
                 isTailrec = false,
-                isSuspend = false
+                isSuspend = false,
+                isExpect = false,
+                isFakeOverride = false,
+                isOperator = false,
+                isInfix = false
         ).apply {
-            descriptor.bind(this)
             parent = owner
 
             val superFunction = baseClassSuite.simpleFunctions()
@@ -364,7 +363,6 @@ internal class TestProcessor (val context: Context) {
                 )
             }
         }
-    }
 
     /**
      * Builds a method in `[testSuite]` class with name `[getterName]`
@@ -372,21 +370,24 @@ internal class TestProcessor (val context: Context) {
      */
     private fun buildInstanceGetter(classSymbol: IrClassSymbol,
                                     owner: IrClass,
-                                    getterName: Name) = WrappedSimpleFunctionDescriptor().let { descriptor ->
+                                    getterName: Name): IrSimpleFunction =
         IrFunctionImpl(
                 owner.startOffset, owner.endOffset,
                 TEST_SUITE_GENERATED_MEMBER,
-                IrSimpleFunctionSymbolImpl(descriptor),
+                IrSimpleFunctionSymbolImpl(),
                 getterName,
-                Visibilities.PROTECTED,
+                DescriptorVisibilities.PROTECTED,
                 Modality.FINAL,
                 classSymbol.typeWithStarProjections,
                 isInline = false,
                 isExternal = false,
                 isTailrec = false,
-                isSuspend = false
+                isSuspend = false,
+                isExpect = false,
+                isFakeOverride = false,
+                isOperator = false,
+                isInfix = false
         ).apply {
-            descriptor.bind(this)
             parent = owner
 
             val superFunction = baseClassSuite.simpleFunctions()
@@ -400,7 +401,6 @@ internal class TestProcessor (val context: Context) {
                 +irReturn(irCall(constructor))
             }
         }
-    }
 
     private val baseClassSuiteConstructor = baseClassSuite.constructors.single {
         it.valueParameters.size == 2
@@ -419,19 +419,19 @@ internal class TestProcessor (val context: Context) {
                                            testSuite: IrClassSymbol,
                                            owner: IrClass,
                                            functions: Collection<TestFunction>,
-                                           ignored: Boolean) = WrappedClassConstructorDescriptor().let { descriptor ->
+                                           ignored: Boolean): IrConstructor =
         IrConstructorImpl(
                 testSuite.owner.startOffset, testSuite.owner.endOffset,
                 TEST_SUITE_GENERATED_MEMBER,
-                IrConstructorSymbolImpl(descriptor),
+                IrConstructorSymbolImpl(),
                 Name.special("<init>"),
-                Visibilities.PUBLIC,
+                DescriptorVisibilities.PUBLIC,
                 testSuite.typeWithStarProjections,
                 isInline = false,
                 isExternal = false,
-                isPrimary = true
+                isPrimary = true,
+                isExpect = false
         ).apply {
-            descriptor.bind(this)
             parent = owner
 
             fun IrClass.getFunction(name: String, predicate: (IrSimpleFunction) -> Boolean) =
@@ -461,9 +461,8 @@ internal class TestProcessor (val context: Context) {
                         registerTestCase, registerFunction, functions)
             }
         }
-    }
 
-    private val IrClass.ignored: Boolean get() = descriptor.annotations.hasAnnotation(IGNORE_FQ_NAME)
+    private val IrClass.ignored: Boolean get() = annotations.hasAnnotation(IGNORE_FQ_NAME)
 
     /**
      * Builds a test suite class representing a test class (any class in the original IrFile with method(s)
@@ -471,22 +470,23 @@ internal class TestProcessor (val context: Context) {
      */
     private fun buildClassSuite(testClass: IrClass,
                                 testCompanion: IrClass?,
-                                functions: Collection<TestFunction>) = WrappedClassDescriptor().let { descriptor ->
+                                functions: Collection<TestFunction>): IrClass =
         IrClassImpl(
                 testClass.startOffset, testClass.endOffset,
                 TEST_SUITE_CLASS,
-                IrClassSymbolImpl(descriptor),
+                IrClassSymbolImpl(),
                 testClass.name.synthesizeSuiteClassName(),
                 ClassKind.CLASS,
-                Visibilities.PRIVATE,
+                DescriptorVisibilities.PRIVATE,
                 Modality.FINAL,
                 isCompanion = false,
                 isInner = false,
                 isData = false,
                 isExternal = false,
-                isInline = false
+                isInline = false,
+                isExpect = false,
+                isFun = false
         ).apply {
-            descriptor.bind(this)
             createParameterDeclarations()
 
             val testClassType = testClass.defaultType
@@ -519,9 +519,8 @@ internal class TestProcessor (val context: Context) {
             companionGetter?.let { declarations += it }
 
             superTypes += symbols.baseClassSuite.typeWith(listOf(testClassType, testCompanionType))
-            addFakeOverrides()
+            addFakeOverrides(context.irBuiltIns)
         }
-    }
     //endregion
 
     // region IR generation methods
@@ -600,10 +599,17 @@ internal class TestProcessor (val context: Context) {
     }
     // endregion
 
+    private fun shouldProcessFile(irFile: IrFile): Boolean = irFile.packageFragmentDescriptor.module.let {
+        // Process test annotations in source libraries too.
+        it == context.moduleDescriptor || it in context.getIncludedLibraryDescriptors()
+    }
+
     fun process(irFile: IrFile) {
         // TODO: uses descriptors.
-        if (irFile.packageFragmentDescriptor.module != context.moduleDescriptor)
+        if (!shouldProcessFile(irFile)) {
             return
+        }
+
         val annotationCollector = AnnotationCollector(irFile)
         irFile.acceptChildrenVoid(annotationCollector)
         createTestSuites(irFile, annotationCollector)

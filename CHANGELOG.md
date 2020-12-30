@@ -1,7 +1,145 @@
-# v1.3.0 (June 2019)
+# 1.4.30-M1 (Dec 2020)
+  * [KT-43597](https://youtrack.jetbrains.com/issue/KT-43597) Xcode 12.2 support
+  * [KT-43276](https://youtrack.jetbrains.com/issue/KT-43276) Add watchos_x64 target
+  * [KT-43198](https://youtrack.jetbrains.com/issue/KT-43198) Init blocks inside of inline classes
+  * [KT-42649](https://youtrack.jetbrains.com/issue/KT-42649) Fix secondary constructors of generic inline classes
+  * [KT-38772](https://youtrack.jetbrains.com/issue/KT-38772) Support non-reified type parameters in typeOf
+  * Compiler customization
+    * [KT-40584](https://youtrack.jetbrains.com/issue/KT-40584) Untie Kotlin/Native from the fixed LLVM distribution
+    * [KT-42234](https://youtrack.jetbrains.com/issue/KT-42234) Move LLVM optimization parameters into konan.properties
+    * [KT-40670](https://youtrack.jetbrains.com/issue/KT-40670) Allow to override konan.properties via CLI
+  * Runtime
+    * [KT-42822](https://youtrack.jetbrains.com/issue/KT-42822) Kotlin/Native Worker leaks ObjC/Swift autorelease references (and indirectly bridged K/N references) on Darwin targets
+    * [KT-42397](https://youtrack.jetbrains.com/issue/KT-42397) Reverse-C interop usage of companion object reports spurious leaks
+    * [GH-4482](https://github.com/JetBrains/kotlin-native/pull/4482) Add a switch to destroy runtime only on shutdown
+    * [GH-4575](https://github.com/JetBrains/kotlin-native/pull/4575) Fix unchecked runtime shutdown
+    * [GH-4194](https://github.com/JetBrains/kotlin-native/pull/4194) Fix possible race in terminate handler
+  * C-interop
+    * [KT-42412](https://youtrack.jetbrains.com/issue/KT-42412) Modality of generated property accessors is always FINAL
+    * [KT-38530](https://youtrack.jetbrains.com/issue/KT-38530) values() method of enum classes is not exposed to Objective-C/Swift
+    * [GH-4572](https://github.com/JetBrains/kotlin-native/pull/4572) Fix for interop enum and struct generation
+  * Optimizations
+    * [KT-42294](https://youtrack.jetbrains.com/issue/KT-42294) Significantly improved compilation time
+    * [KT-42942](https://youtrack.jetbrains.com/issue/KT-42942) Optimize peak backend memory by clearing BindingContext after psi2ir
+    * [KT-31072](https://youtrack.jetbrains.com/issue/KT-31072) Don't use non-reified arguments to specialize type operations in IR inliner
+
+# 1.4.21 (Dec 2020)
+  * Fixed [KT-43517](https://youtrack.jetbrains.com/issue/KT-43517)
+  * Fixed [KT-43530](https://youtrack.jetbrains.com/issue/KT-43530)
+  * Fixed [KT-43265](https://youtrack.jetbrains.com/issue/KT-43265)
+
+# 1.4.20 (Nov 2020)
+  * XCode 12 support
+  * Completely reworked escape analysis for object allocation
+  * Use ForeignException wrapper to handle native exceptions ([GH-3553](https://github.com/JetBrains/kotlin-native/issues/3553))
+  * CocoaPods plugin improvements
+  * equals/hashCode support for adapted callable references ([KT-39800](https://youtrack.jetbrains.com/issue/KT-39800))
+  * equals/hashCode support for fun interfaces ([KT-39798](https://youtrack.jetbrains.com/issue/KT-39798))
+  * IR-level optimizations
+    * Constant folding
+    * String concatenation flattening
+  * Various fixes/improvements to compiler caches
+  * Some fixes to samples (calculator, tensorflow)
+  * Bug fixes
+    * Eliminate recursive GC calls ([KT-42275](https://youtrack.jetbrains.com/issue/KT-42275))
+    * Fix support for @OverrideInit constructors with default arguments ([KT-41910](https://youtrack.jetbrains.com/issue/KT-41910))
+    * Fix support for forward declarations ([KT-41655](https://youtrack.jetbrains.com/issue/KT-41655))
+    * [KT-41394](https://youtrack.jetbrains.com/issue/KT-41394)
+    * [KT-41811](https://youtrack.jetbrains.com/issue/KT-41811)
+    * [KT-41716](https://youtrack.jetbrains.com/issue/KT-41716)
+    * [KT-41250](https://youtrack.jetbrains.com/issue/KT-41250)
+    * [KT-42000](https://youtrack.jetbrains.com/issue/KT-42000)
+    * [KT-41907](https://youtrack.jetbrains.com/issue/KT-41907)
+
+# 1.4.10 (Sep 2020)
+  * Fixed a newline handling in @Deprecated annotation in ObjCExport ([KT-39206](https://youtrack.jetbrains.com/issue/KT-39206))
+  * Fixed suspend function types in ObjCExport ([KT-40976](https://youtrack.jetbrains.com/issue/KT-40976))
+  * Fixed support for unsupported C declarations in cinterop ([KT-39762](https://youtrack.jetbrains.com/issue/KT-39762))
+
+# v1.4.0 (Aug 2020)
+  * Objective-C/Swift interop:
+    * Reworked exception handling ([GH-3822](https://github.com/JetBrains/kotlin-native/pull/3822), [GH-3842](https://github.com/JetBrains/kotlin-native/pull/3842))
+    * Enabled support for Objective-C generics by default ([GH-3778](https://github.com/JetBrains/kotlin-native/pull/3778))
+    * Support for Kotlin’s suspending functions ([GH-3915](https://github.com/JetBrains/kotlin-native/pull/3915))
+    * Handle variadic block types in ObjC interop ([`KT-36766`](https://youtrack.jetbrains.com/issue/KT-36766))
+  * Added native-specific frontend checkers (implemented in the main Kotlin repository: [GH-3293](https://github.com/JetBrains/kotlin/pull/3293), [GH-3091](https://github.com/JetBrains/kotlin/pull/3091), [GH-3172](https://github.com/JetBrains/kotlin/pull/3172))
+  * .dSYMs for release binaries on Apple platforms ([GH-4085](https://github.com/JetBrains/kotlin-native/pull/4085))
+  * Improved compilation time of builds with interop libraries by reworking cinterop under the hood.
+  * Experimental mimalloc allocator support (-Xallocator=mimalloc) to improve execution time performance. ([GH-3704](https://github.com/JetBrains/kotlin-native/pull/3704))
+  * Tune GC to improve execution time performance
+  * Various fixes to compiler caches and Gradle daemon usage
+
+# v1.3.72 (April 2020)
+  * Fix ios_x64 platform libs cache for iOS 11 and 12 (GH-4071)
+
+# v1.3.71 (March 2020)
+  * Fix `lazy {}` memory leak regression ([`KT-37232`](https://youtrack.jetbrains.com/issue/KT-37232), GH-3944)
+  * Fix using cached Kotlin subclasses of Objective-C classes (GH-3986)
+
+# v1.3.70 (Dec 2019)
+  * Support compiler caches for debug mode (GH-3650)
+  * Support running Kotlin/Native compiler from Gradle daemon (GH-3442)
+  * Support multiple independent Kotlin frameworks in the same application (GH-3457)
+  * Compile-time allocation for some singleton objects (GH-3645)
+  * Native support for SIMD vector types in compiler and interop (GH-3498)
+  * API for runtime detector of cyclic garbage (GH-3616)
+  * Commonized StringBuilder (GH-3593) and Float.rangeTo (KT-35299)
+  * Fix interop with localized strings (GH-3562)
+  * Provide utility for user-side generation of platform libraries (GH-3538)
+  * On-stack allocation using local escape analysis (GH-3625)
+  * Code coverage support on Linux and Windows (GH-3403)
+  * Debugging experience improvements (GH-3561, GH-3638, GH-3606)
+
+# v1.3.60 (Oct 2019)
+  * Support XCode 11
+  * Switch to LLVM 8.0
+  * New compiler targets:
+    * watchOS targets, watchos_x86, watchos_arm64 and watchos_arm32 (GH-3323, GH-3404, GH-3344)
+    * tvOS targets tvos_x64 and tvos_arm64 (GH-3303, GH-3363)
+    * native Android targets android_x86 and android_x64 (GH-3306, GH-3314)
+  * Standard CLI library kotlinx.cli is shipped with the compiler distribution (GH-3215)
+  * Improved debug information for inline functions (KT-28929, GH-3292)
+  * Improved runtime performance of interface calls, up to 5x faster (GH-3377)
+  * Improved runtime performance of type checks, up to 50x faster (GH-3291)
+  * Produce native binaries directly from klibs, speeds up large project compilation (GH-3246)
+  * Supported arbitrary (up to 255 inclusive) function arity (GH-3253)
+  * Supported callable references to suspend functions (GH-3197)
+  * Implemented experimental -Xg0 switch, symbolication of release binaries for iOS (GH-3233, GH-3367)
+  * Interop:
+    * Allow passing untyped null as variadic function's parameter (GH-3312, KT-33525)
+  * Standard library:
+    * Allow scheduling jobs in arbitrary K/N context, not only Worker (GH-3316)
+  * Important bug fixes:
+    * Boxed negative values can lead to crashes on ios_arm64 (GH-3296)
+    * Implemented thread-safe tracking of Objective-C references to Kotlin objects (GH-3267)
+
+# v1.3.50 (Aug 2019)
+  * Kotlin/Native versioning now aligned with Kotlin versioning
+  * Exhaustive platform libraries on macOS (GH-3141)
+  * Update to Gradle 5.5 (GH-3166)
+  * Improved debug information correctness (GH-3130)
+  * Major memory manager refactoring (GH-3129)
+  * Embed actual bitcode in produced frameworks (GH-2974)
+  * Compilation speed improvements
+  * Interop:
+    * Support kotlin.Deprecated when producing framework (GH-3114)
+    * Ensure produced Objective-C header does not have warnings (GH-3101)
+    * Speed up interop stub generator (GH-3082, GH-3050)
+    * getOriginalKotlinClass() to get KClass for Kotlin classes in Objective-C (GH-3036)
+    * Supported nullable primitive types in reverse C interop (GH-3198)
+  * Standard library
+    * API for delayed job execution on worker (GH-2971)
+    * API for running via worker's job queue (GH-3078)
+    * MonoClock and Duration support (GH-3028)
+    * Support typeOf (KT-29917, KT-28625)
+    * New zero-terminated utf8 to String conversion API (GH-3116)
+    * Optimize StringBuilder for certain cases (GH-3202)
+    * Implemented Array.fill API (GH-3244)
+
+# v1.3.0 (Jun 2019)
   * CoreLocation platform library on macOS (GH-3041)
   * Converting Unit type to Void during producing framework for Objective-C/Swift (GH-2549, GH-1271)
-  * Support linux/arm64 targets (GH-1709)
+  * Support linux/arm64 targets (GH-2917)
   * Performance improvements of memory manager (GH-2813)
   * FreezableAtomicReference prototype (GH-2776)
   * Logging and error messages enhancements 

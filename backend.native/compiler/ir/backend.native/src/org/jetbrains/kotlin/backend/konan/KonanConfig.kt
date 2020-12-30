@@ -9,44 +9,51 @@ import com.intellij.openapi.project.Project
 import org.jetbrains.kotlin.cli.common.CLIConfigurationKeys
 import org.jetbrains.kotlin.cli.common.config.kotlinSourceRoots
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
-import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity.*
-import org.jetbrains.kotlin.cli.common.messages.GroupingMessageCollector
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.descriptors.ModuleDescriptor
-import org.jetbrains.kotlin.konan.*
+import org.jetbrains.kotlin.konan.CURRENT
+import org.jetbrains.kotlin.konan.CompilerVersion
+import org.jetbrains.kotlin.konan.MetaVersion
+import org.jetbrains.kotlin.konan.TempFiles
 import org.jetbrains.kotlin.konan.file.File
 import org.jetbrains.kotlin.konan.library.KonanLibrary
-import org.jetbrains.kotlin.konan.library.defaultResolver
-import org.jetbrains.kotlin.konan.library.libraryResolver
 import org.jetbrains.kotlin.konan.properties.loadProperties
 import org.jetbrains.kotlin.konan.target.*
-import org.jetbrains.kotlin.konan.library.resolver.TopologicalLibraryOrder
-import org.jetbrains.kotlin.konan.util.Logger
-import kotlin.system.exitProcess
-import org.jetbrains.kotlin.library.toUnresolvedLibraries
-import org.jetbrains.kotlin.konan.KonanVersion
+import org.jetbrains.kotlin.konan.util.KonanHomeProvider
+import org.jetbrains.kotlin.library.KotlinLibrary
+import org.jetbrains.kotlin.library.resolver.TopologicalLibraryOrder
+import org.jetbrains.kotlin.utils.addToStdlib.cast
 
 class KonanConfig(val project: Project, val configuration: CompilerConfiguration) {
 
     internal val distribution = Distribution(
-        false,
-        null,
-        configuration.get(KonanConfigKeys.RUNTIME_FILE))
+            configuration.get(KonanConfigKeys.KONAN_HOME) ?: KonanHomeProvider.determineKonanHome(),
+            false,
+            configuration.get(KonanConfigKeys.RUNTIME_FILE),
+            configuration.get(KonanConfigKeys.OVERRIDE_KONAN_PROPERTIES)
+    )
 
-    internal val platformManager = PlatformManager(distribution)
+    private val platformManager = PlatformManager(distribution)
     internal val targetManager = platformManager.targetManager(configuration.get(KonanConfigKeys.TARGET))
     internal val target = targetManager.target
     internal val phaseConfig = configuration.get(CLIConfigurationKeys.PHASE_CONFIG)!!
 
-    val linkOnly: Boolean =
-            configuration.kotlinSourceRoots.isEmpty() && libraryNames.isNotEmpty() && produce.isNativeBinary
-
-    val infoArgsOnly = configuration.kotlinSourceRoots.isEmpty() && !linkOnly
-
+    // TODO: debug info generation mode and debug/release variant selection probably requires some refactoring.
     val debug: Boolean get() = configuration.getBoolean(KonanConfigKeys.DEBUG)
+    val lightDebug: Boolean = configuration.get(KonanConfigKeys.LIGHT_DEBUG)
+            ?: target.family.isAppleFamily // Default is true for Apple targets.
 
     val memoryModel: MemoryModel get() = configuration.get(KonanConfigKeys.MEMORY_MODEL)!!
+    val destroyRuntimeMode: DestroyRuntimeMode get() = configuration.get(KonanConfigKeys.DESTROY_RUNTIME_MODE)!!
+
+    val needVerifyIr: Boolean
+        get() = configuration.get(KonanConfigKeys.VERIFY_IR) == true
+
+    val needCompilerVerification: Boolean
+        get() = configuration.get(KonanConfigKeys.VERIFY_COMPILER) ?:
+            (configuration.getBoolean(KonanConfigKeys.OPTIMIZATION) ||
+                CompilerVersion.CURRENT.meta != MetaVersion.RELEASE)
 
     init {
         if (!platformManager.isEnabled(target)) {
@@ -66,83 +73,120 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
 
     internal val produce get() = configuration.get(KonanConfigKeys.PRODUCE)!!
 
+    internal val metadataKlib get() = configuration.get(KonanConfigKeys.METADATA_KLIB)!!
+
     internal val produceStaticFramework get() = configuration.getBoolean(KonanConfigKeys.STATIC_FRAMEWORK)
-
-    val outputFiles = OutputFiles(configuration.get(KonanConfigKeys.OUTPUT), target, produce)
-    val tempFiles = TempFiles(outputFiles.outputName, configuration.get(KonanConfigKeys.TEMPORARY_FILES_DIR))
-
-    val outputFile = outputFiles.mainFile
-
-    val moduleId: String
-        get() = configuration.get(KonanConfigKeys.MODULE_NAME) ?: File(outputFiles.outputName).name
 
     internal val purgeUserLibs: Boolean
         get() = configuration.getBoolean(KonanConfigKeys.PURGE_USER_LIBS)
 
-    private val libraryNames: List<String>
-        get() = configuration.getList(KonanConfigKeys.LIBRARY_FILES)
+    internal val resolve = KonanLibrariesResolveSupport(configuration, target, distribution)
 
-    private val unresolvedLibraries = libraryNames.toUnresolvedLibraries
+    internal val resolvedLibraries get() = resolve.resolvedLibraries
 
-    private val repositories = configuration.getList(KonanConfigKeys.REPOSITORIES)
-    private val resolverLogger =
-        object : Logger {
-            private val collector = configuration.getNotNull(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY)
-            override fun warning(message: String)= collector.report(STRONG_WARNING, message)
-            override fun error(message: String) = collector.report(ERROR, message)
-            override fun log(message: String) = collector.report(LOGGING, message)
-            override fun fatal(message: String): Nothing {
-                collector.report(ERROR, message)
-                (collector as? GroupingMessageCollector)?.flush()
-                exitProcess(1)
-            }
-        }
+    internal val cacheSupport = CacheSupport(configuration, resolvedLibraries, target, produce)
 
-    private val compatibleCompilerVersions: List<KonanVersion> =
-        configuration.getList(KonanConfigKeys.COMPATIBLE_COMPILER_VERSIONS).map { it.parseKonanVersion() }
+    internal val cachedLibraries: CachedLibraries
+        get() = cacheSupport.cachedLibraries
 
-    private val resolver = defaultResolver(
-        repositories,
-        libraryNames.filter { it.contains(File.separator) },
-        target,
-        distribution,
-        compatibleCompilerVersions,
-        resolverLogger
-    ).libraryResolver()
+    internal val librariesToCache: Set<KotlinLibrary>
+        get() = cacheSupport.librariesToCache
 
-    internal val resolvedLibraries by lazy {
-        resolver.resolveWithDependencies(
-                unresolvedLibraries,
-                noStdLib = configuration.getBoolean(KonanConfigKeys.NOSTDLIB),
-                noDefaultLibs = configuration.getBoolean(KonanConfigKeys.NODEFAULTLIBS)).also {
+    val outputFiles =
+            OutputFiles(configuration.get(KonanConfigKeys.OUTPUT) ?: cacheSupport.tryGetImplicitOutput(),
+                    target, produce)
 
-            validateExportedLibraries(configuration, it)
-        }
-    }
+    val tempFiles = TempFiles(outputFiles.outputName, configuration.get(KonanConfigKeys.TEMPORARY_FILES_DIR))
+
+    val outputFile get() = outputFiles.mainFile
+
+    val moduleId: String
+        get() = configuration.get(KonanConfigKeys.MODULE_NAME) ?: File(outputFiles.outputName).name
+
+    val shortModuleName: String?
+        get() = configuration.get(KonanConfigKeys.SHORT_MODULE_NAME)
+
+    val infoArgsOnly = configuration.kotlinSourceRoots.isEmpty()
+            && configuration[KonanConfigKeys.INCLUDED_LIBRARIES].isNullOrEmpty()
+            && librariesToCache.isEmpty()
 
     fun librariesWithDependencies(moduleDescriptor: ModuleDescriptor?): List<KonanLibrary> {
         if (moduleDescriptor == null) error("purgeUnneeded() only works correctly after resolve is over, and we have successfully marked package files as needed or not needed.")
-
-        return resolvedLibraries.filterRoots { (!it.isDefault && !this.purgeUserLibs) || it.isNeededForLink }.getFullList(TopologicalLibraryOrder)
+        return resolvedLibraries.filterRoots { (!it.isDefault && !this.purgeUserLibs) || it.isNeededForLink }.getFullList(TopologicalLibraryOrder).cast()
     }
 
-    internal val defaultNativeLibraries: List<String> = mutableListOf<String>().apply {
+    val shouldCoverSources = configuration.getBoolean(KonanConfigKeys.COVERAGE)
+    private val shouldCoverLibraries = !configuration.getList(KonanConfigKeys.LIBRARIES_TO_COVER).isNullOrEmpty()
+
+    internal val runtimeNativeLibraries: List<String> = mutableListOf<String>().apply {
         add(if (debug) "debug.bc" else "release.bc")
-        add(if (memoryModel == MemoryModel.STRICT) "strict.bc" else "relaxed.bc")
-        if (produce == CompilerOutputKind.PROGRAM) {
-            addAll(distribution.launcherFiles)
+        val effectiveMemoryModel = when (memoryModel) {
+            MemoryModel.STRICT -> MemoryModel.STRICT
+            MemoryModel.RELAXED -> MemoryModel.RELAXED
+            MemoryModel.EXPERIMENTAL -> {
+                if (!target.supportsThreads()) {
+                    configuration.report(CompilerMessageSeverity.STRONG_WARNING,
+                            "Experimental memory model requires threads, which are not supported on target ${target.name}. Used strict memory model.")
+                    MemoryModel.STRICT
+                } else if (destroyRuntimeMode == DestroyRuntimeMode.LEGACY) {
+                    configuration.report(CompilerMessageSeverity.STRONG_WARNING,
+                            "Experimental memory model is incompatible with 'legacy' destroy runtime mode. Used strict memory model.")
+                    MemoryModel.STRICT
+                } else {
+                    MemoryModel.EXPERIMENTAL
+                }
+            }
+        }
+        val useMimalloc = if (configuration.get(KonanConfigKeys.ALLOCATION_MODE) == "mimalloc") {
+            if (target.supportsMimallocAllocator()) {
+                true
+            } else {
+                configuration.report(CompilerMessageSeverity.STRONG_WARNING,
+                        "Mimalloc allocator isn't supported on target ${target.name}. Used standard mode.")
+                false
+            }
+        } else {
+            false
+        }
+        when (effectiveMemoryModel) {
+            MemoryModel.STRICT -> {
+                add("strict.bc")
+                add("legacy_memory_manager.bc")
+            }
+            MemoryModel.RELAXED -> {
+                add("relaxed.bc")
+                add("legacy_memory_manager.bc")
+            }
+            MemoryModel.EXPERIMENTAL -> {
+                add("experimental_memory_manager.bc")
+            }
+        }
+        if (shouldCoverLibraries || shouldCoverSources) add("profileRuntime.bc")
+        if (useMimalloc) {
+            add("opt_alloc.bc")
+            add("mimalloc.bc")
+        } else {
+            add("std_alloc.bc")
         }
     }.map {
         File(distribution.defaultNatives(target)).child(it).absolutePath
     }
 
-    internal val nativeLibraries: List<String> = 
+    internal val launcherNativeLibraries: List<String> = distribution.launcherFiles.map {
+        File(distribution.defaultNatives(target)).child(it).absolutePath
+    }
+
+    internal val objCNativeLibrary: String =
+            File(distribution.defaultNatives(target)).child("objc.bc").absolutePath
+
+    internal val exceptionsSupportNativeLibrary: String =
+            File(distribution.defaultNatives(target)).child("exceptionsSupport.bc").absolutePath
+
+    internal val nativeLibraries: List<String> =
         configuration.getList(KonanConfigKeys.NATIVE_LIBRARY_FILES)
 
     internal val includeBinaries: List<String> = 
         configuration.getList(KonanConfigKeys.INCLUDED_BINARY_FILES)
-
-    internal val defaultSystemLibraries: List<String> = emptyList()
 
     internal val languageVersionSettings =
             configuration.get(CommonConfigurationKeys.LANGUAGE_VERSION_SETTINGS)!!
@@ -159,4 +203,3 @@ class KonanConfig(val project: Project, val configuration: CompilerConfiguration
 
 fun CompilerConfiguration.report(priority: CompilerMessageSeverity, message: String) 
     = this.getNotNull(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY).report(priority, message)
-

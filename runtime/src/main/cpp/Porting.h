@@ -17,6 +17,7 @@
 #ifndef RUNTIME_PORTING_H
 #define RUNTIME_PORTING_H
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -27,23 +28,26 @@ namespace konan {
 // Console operations.
 void consoleInit();
 void consolePrintf(const char* format, ...);
+void consoleErrorf(const char* format, ...);
 void consoleWriteUtf8(const void* utf8, uint32_t sizeBytes);
 void consoleErrorUtf8(const void* utf8, uint32_t sizeBytes);
 // Negative return value denotes that read wasn't successful.
 int32_t consoleReadUtf8(void* utf8, uint32_t maxSizeBytes);
+void consoleFlush();
 
 // Process control.
 RUNTIME_NORETURN void abort(void);
 RUNTIME_NORETURN void exit(int32_t status);
 
 // Thread control.
-void onThreadExit(void (*destructor)());
+void onThreadExit(void (*destructor)(void*), void* destructorParameter);
 
 // String/byte operations.
 // memcpy/memmove/memcmp are not here intentionally, as frequently implemented/optimized
 // by C compiler.
 void* memmem(const void *big, size_t bigLen, const void *little, size_t littleLen);
 int snprintf(char* buffer, size_t size, const char* format, ...);
+int vsnprintf(char* buffer, size_t size, const char* format, va_list args);
 size_t strnlen(const char* buffer, size_t maxSize);
 
 
@@ -75,6 +79,7 @@ void *memset(void *b, int c, size_t len);
 
 // Memory operations.
 void* calloc(size_t count, size_t size);
+void* calloc_aligned(size_t count, size_t size, size_t alignment);
 void free(void* ptr);
 
 // Time operations.

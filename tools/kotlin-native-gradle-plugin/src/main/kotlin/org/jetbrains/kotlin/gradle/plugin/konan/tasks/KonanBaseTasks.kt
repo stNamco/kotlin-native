@@ -48,7 +48,12 @@ internal val Project.simpleOsName
 /** A task with a KonanTarget specified. */
 abstract class KonanTargetableTask: DefaultTask() {
 
-    @Input internal lateinit var konanTarget: KonanTarget
+    @get:Input
+    val konanTargetName: String
+        get() = konanTarget.name
+
+    @get:Internal
+    internal lateinit var konanTarget: KonanTarget
 
     internal open fun init(target: KonanTarget) {
         this.konanTarget = target
@@ -101,8 +106,6 @@ abstract class KonanArtifactTask: KonanTargetableTask(), KonanArtifactSpec {
 
         val artifactNameWithoutSuffix = artifact.name.removeSuffix("$artifactSuffix")
         project.pluginManager.withPlugin("maven-publish") {
-            if (!(project.getProperty(KonanPlugin.ProjectProperty.KONAN_PUBLICATION_ENABLED) as Boolean))
-                return@withPlugin
             platformConfiguration.artifacts.add(object: PublishArtifact {
                 override fun getName(): String = artifactNameWithoutSuffix
                 override fun getExtension() = if (artifactSuffix.startsWith('.')) artifactSuffix.substring(1) else artifactSuffix
@@ -167,6 +170,9 @@ abstract class KonanArtifactWithLibrariesTask: KonanArtifactTask(), KonanArtifac
     @Input
     var noDefaultLibs = false
 
+    @Input
+    var noEndorsedLibs = false
+
     // DSL
 
     override fun libraries(closure: Closure<Unit>) = libraries(ConfigureUtil.configureUsing(closure))
@@ -175,5 +181,9 @@ abstract class KonanArtifactWithLibrariesTask: KonanArtifactTask(), KonanArtifac
 
     override fun noDefaultLibs(flag: Boolean) {
         noDefaultLibs = flag
+    }
+
+    override fun noEndorsedLibs(flag: Boolean) {
+        noEndorsedLibs = flag
     }
 }

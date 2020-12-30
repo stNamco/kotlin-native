@@ -14,7 +14,9 @@ public enum class OsFamily {
     LINUX,
     WINDOWS,
     ANDROID,
-    WASM
+    WASM,
+    TVOS,
+    WATCHOS
 }
 
 /**
@@ -34,9 +36,11 @@ public enum class CpuArchitecture(val bitness: Int) {
 /**
  * Memory model.
  */
+// NOTE: Must match `MemoryModel` in `Memory.h`
 public enum class MemoryModel {
     STRICT,
-    RELAXED
+    RELAXED,
+    EXPERIMENTAL,
 }
 
 /**
@@ -79,6 +83,21 @@ public object Platform {
     public val isDebugBinary: Boolean
         get() = Platform_isDebugBinary()
 
+    /**
+     * If the memory leak checker is activated, by default `true` in debug mode, `false` in release.
+     * When memory leak checker is activated, and leak is detected during last Kotlin context
+     * deinitialization process - error message with leak information is printed and application
+     * execution is aborted.
+     *
+     * @see isDebugBinary
+     */
+    public var isMemoryLeakCheckerActive: Boolean
+        get() = Platform_getMemoryLeakChecker()
+        set(value) = Platform_setMemoryLeakChecker(value)
+
+    public var isCleanersLeakCheckerActive: Boolean
+        get() = Platform_getCleanersLeakChecker()
+        set(value) = Platform_setCleanersLeakChecker(value)
 }
 
 @SymbolName("Konan_Platform_canAccessUnaligned")
@@ -98,3 +117,15 @@ private external fun Platform_getMemoryModel(): Int
 
 @SymbolName("Konan_Platform_isDebugBinary")
 private external fun Platform_isDebugBinary(): Boolean
+
+@SymbolName("Konan_Platform_getMemoryLeakChecker")
+private external fun Platform_getMemoryLeakChecker(): Boolean
+
+@SymbolName("Konan_Platform_setMemoryLeakChecker")
+private external fun Platform_setMemoryLeakChecker(value: Boolean): Unit
+
+@SymbolName("Konan_Platform_getCleanersLeakChecker")
+private external fun Platform_getCleanersLeakChecker(): Boolean
+
+@SymbolName("Konan_Platform_setCleanersLeakChecker")
+private external fun Platform_setCleanersLeakChecker(value: Boolean): Unit

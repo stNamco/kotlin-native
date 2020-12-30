@@ -19,17 +19,18 @@ package org.jetbrains.kotlin.gradle.plugin.konan
 import org.gradle.api.Named
 import org.gradle.api.Project
 import org.gradle.api.file.FileCollection
+import org.jetbrains.kotlin.gradle.plugin.konan.KonanPlugin.ProjectProperty.KONAN_HOME
 import org.jetbrains.kotlin.konan.target.Family
 import org.jetbrains.kotlin.konan.target.HostManager
 import org.jetbrains.kotlin.konan.target.KonanTarget
 import org.jetbrains.kotlin.konan.util.DependencyProcessor
+import java.nio.file.Files
 
 internal interface KonanToolRunner: Named {
     val mainClass: String
     val classpath: FileCollection
     val jvmArgs: List<String>
     val environment: Map<String, Any>
-    val additionalSystemProperties: Map<String, String>
 
     fun run(args: List<String>)
     fun run(vararg args: String) = run(args.toList())
@@ -39,7 +40,8 @@ internal abstract class KonanCliRunner(
         val toolName: String,
         val fullName: String,
         val project: Project,
-        private val additionalJvmArgs: List<String>
+        private val additionalJvmArgs: List<String>,
+        private val konanHome: String
 ): KonanToolRunner {
     override val mainClass = "org.jetbrains.kotlin.cli.utilities.MainKt"
 
@@ -56,7 +58,7 @@ internal abstract class KonanCliRunner(
         setOf("java.endorsed.dirs")
 
     override val classpath: FileCollection =
-            project.fileTree("${project.konanHome}/konan/lib/")
+            project.fileTree("$konanHome/konan/lib/")
             .apply { include("*.jar")  }
 
     override val jvmArgs = HostManager.defaultJvmArgs.toMutableList().apply {
@@ -67,11 +69,6 @@ internal abstract class KonanCliRunner(
         addAll(additionalJvmArgs)
         addAll(project.jvmArgs)
     }
-
-    override val additionalSystemProperties = mutableMapOf(
-            "konan.home" to project.konanHome,
-            "java.library.path" to "${project.konanHome}/konan/nativelib"
-    )
 
     override val environment = mutableMapOf("LIBCLANG_DISABLE_CRASH_RECOVERY" to "1")
 
@@ -90,7 +87,7 @@ internal abstract class KonanCliRunner(
         project.logger.info("Run tool: $toolName with args: ${args.joinToString(separator = " ")}")
         if (classpath.isEmpty) {
             throw IllegalStateException("Classpath of the tool is empty: $toolName\n" +
-                    "Probably the '${KonanPlugin.ProjectProperty.KONAN_HOME}' project property contains an incorrect path.\n" +
+                    "Probably the '${KONAN_HOME.propertyName}' project property contains an incorrect path.\n" +
                     "Please change it to the compiler root directory and rerun the build.")
         }
 
@@ -105,7 +102,6 @@ internal abstract class KonanCliRunner(
                     .escapeQuotesForWindows()
                     .toMap()
             )
-            spec.systemProperties(additionalSystemProperties)
             spec.args(listOf(toolName) + transformArgs(args))
             blacklistEnvironment.forEach { spec.environment.remove(it) }
             spec.environment(environment)
@@ -113,14 +109,16 @@ internal abstract class KonanCliRunner(
     }
 }
 
-internal class KonanInteropRunner(project: Project, additionalJvmArgs: List<String> = emptyList())
-    : KonanCliRunner("cinterop", "Kotlin/Native cinterop tool", project, additionalJvmArgs)
-{
+internal class KonanInteropRunner(
+        project: Project,
+        additionalJvmArgs: List<String> = emptyList(),
+        konanHome: String = project.konanHome
+) : KonanCliRunner("cinterop", "Kotlin/Native cinterop tool", project, additionalJvmArgs, konanHome) {
     init {
         if (HostManager.host == KonanTarget.MINGW_X64) {
 	    //TODO: Oh-ho-ho fix it in more convinient way.
             environment.put("PATH", DependencyProcessor.defaultDependenciesRoot.absolutePath +
-                    "\\msys2-mingw-w64-x86_64-gcc-7.3.0-clang-llvm-lld-6.0.1-2" +
+                    "\\msys2-mingw-w64-x86_64-clang-llvm-lld-compiler_rt-8.0.1" +
                     "\\bin;${environment.get("PATH")}")
         }
     }
@@ -129,26 +127,26 @@ internal class KonanInteropRunner(project: Project, additionalJvmArgs: List<Stri
 internal class KonanCompilerRunner(
     project: Project,
     additionalJvmArgs: List<String> = emptyList(),
-    val useArgFile: Boolean = true
-) : KonanCliRunner("konanc", "Kotlin/Native compiler", project, additionalJvmArgs)
+    val useArgFile: Boolean = true,
+    konanHome: String = project.konanHome
+) : KonanCliRunner("konanc", "Kotlin/Native compiler", project, additionalJvmArgs, konanHome)
 {
     override fun transformArgs(args: List<String>): List<String> {
         if (!useArgFile) {
             return args
         }
 
-        val argFile = createTempFile(prefix = "konancArgs", suffix = ".lst").apply {
-            deleteOnExit()
+        val argFile = Files.createTempFile("konancArgs", ".lst").toAbsolutePath().apply {
+            toFile().deleteOnExit()
         }
-        argFile.printWriter().use { writer ->
-            args.forEach {
-                writer.println(it)
-            }
-        }
+        Files.write(argFile, args)
 
-        return listOf("@${argFile.absolutePath}")
+        return listOf("@${argFile}")
     }
 }
 
-internal class KonanKlibRunner(project: Project, additionalJvmArgs: List<String> = emptyList())
-    : KonanCliRunner("klib", "Klib management tool", project, additionalJvmArgs)
+internal class KonanKlibRunner(
+        project: Project,
+        additionalJvmArgs: List<String> = emptyList(),
+        konanHome: String = project.konanHome
+) : KonanCliRunner("klib", "Klib management tool", project, additionalJvmArgs, konanHome)

@@ -4,31 +4,43 @@ import org.jetbrains.kotlin.BuildRegister
 import org.jetbrains.kotlin.MPPTools
 
 buildscript {
-    apply from: "$rootProject.projectDir/gradle/kotlinGradlePlugin.gradle"
+    ext.rootBuildDirectory = file('..')
+
+    apply from: "$rootBuildDirectory/gradle/loadRootProperties.gradle"
+    apply from: "$rootBuildDirectory/gradle/kotlinGradlePlugin.gradle"
     repositories {
-        maven {
-            url 'https://cache-redirector.jetbrains.com/jcenter'
-        }
+        maven { url 'https://cache-redirector.jetbrains.com/jcenter'}
+        maven { url 'https://cache-redirector.jetbrains.com/maven-central' }
+        mavenCentral()
+        maven { url buildKotlinCompilerRepo }
+        maven { url kotlinCompilerRepo }
+        jcenter()
+        maven { url "https://kotlin.bintray.com/kotlinx" }
+        maven { url "https://dl.bintray.com/kotlin/kotlin-dev" }
+    }
+
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-native-build-tools:$konanVersion"
     }
 }
 
-def rootBuildDirectory = rootProject.projectDir
+def rootBuildDirectory = projectDir.parentFile
 
 task konanRun {
     subprojects.each {
-        dependsOn it.getTasksByName('konanRun', true)[0]
+        dependsOn "${it.path}:konanRun"
     }
 }
     
 task jvmRun {
     subprojects.each {
-        dependsOn it.getTasksByName('jvmRun', true)[0]
+        dependsOn "${it.path}:jvmRun"
     }
 }
 
 task clean {
     subprojects.each {
-        dependsOn it.getTasksByName('clean', true)[0]
+        dependsOn "${it.path}:clean"
     }
     doLast {
         delete "${buildDir.absolutePath}"
@@ -36,6 +48,23 @@ task clean {
 }
 
 defaultTasks 'konanRun'
+
+private static String getAnalyzerTargetName() {
+    // Copy-pasted from tools/benchmarksAnalyzer/build.gradle.
+    String target = System.getProperty("os.name")
+    if (target == 'Linux') return 'linux'
+    if (target.startsWith('Windows')) return 'windows'
+    if (target.startsWith('Mac')) return 'macos'
+    return 'unknown'
+}
+
+private String findAnalyzerBinary() {
+    String result = "${projectDir}/../${analyzerToolDirectory}/${getAnalyzerTargetName()}/" +
+            "${analyzerTool}ReleaseExecutable/${analyzerTool}${MPPTools.getNativeProgramExtension()}"
+
+    if (file(result).exists()) return result
+    else return null
+}
 
 // Produce and send slack report.
 task slackReport(type: RegressionsReporter) {
@@ -64,37 +93,124 @@ task slackSummary(type: RegressionsSummaryReporter) {
                           'Windows': "${rootBuildDirectory}/targetsResults/Windows 10.txt".toString()]
 }
 
-private def uploadBenchmarkResultToBintray(String fileName) {
+private String getUploadedFile(String fileName) {
     def teamcityConfig = System.getenv("TEAMCITY_BUILD_PROPERTIES_FILE")
     if (teamcityConfig) {
         def buildProperties = new Properties()
         buildProperties.load(new FileInputStream(teamcityConfig))
-        def user = buildProperties.getProperty("bintray.user")
-        def password = buildProperties.getProperty("bintray.apikey")
         def buildNumber = buildProperties.getProperty("build.number")
         def target = System.getProperty("os.name").replaceAll("\\s", "")
-        MPPTools.uploadFileToBintray("${bintrayUrl}", "${bintrayRepo}",
-                buildNumber, "${bintrayPackage}", "${target}/${buildNumber}/${fileName}",
-                "${buildDir.absolutePath}/${fileName}", user, password)
+        return "${target}/${buildNumber}/${fileName}"
+    }
+    return null
+}
+
+private def uploadBenchmarkResultToArtifactory(String fileName) {
+    def teamcityConfig = System.getenv("TEAMCITY_BUILD_PROPERTIES_FILE")
+    if (teamcityConfig) {
+        def uploadedFile = getUploadedFile(fileName)
+        def buildProperties = new Properties()
+        buildProperties.load(new FileInputStream(teamcityConfig))
+        def password = buildProperties.getProperty("artifactory.apikey")
+        MPPTools.uploadFileToArtifactory("${artifactoryUrl}", "${artifactoryRepo}",
+                uploadedFile, "${buildDir.absolutePath}/${fileName}", password)
+    }
+}
+
+// Register external benchmarks reports (e.g. results of libraries benchmarks)
+task registerExternalBenchmarks {
+    doLast {
+        def reports = externalReports.split(';')
+        def jsonReports = []
+        reports.each {
+            def reportFile = new File(buildDir, it)
+            if (!reportFile.exists())
+                return
+
+            def lines = reportFile.readLines()
+            if (lines.size < 4) {
+                project.logger.warn("Couldn't use report to register benchmarks. Wrong format.")
+                return
+            }
+            def name = lines[0]
+            def options = lines[1]
+            if (!options.startsWith("OPTIONS")) {
+                project.logger.warn("Couldn't use report to register benchmarks. Wrong format in options description.")
+                return
+            }
+            def optionsList = options.replace("OPTIONS ", "").replaceAll("\\[|\\]", "").split(",\\s*").toList()
+            def status = lines[2]
+            def compileTime = null
+            def codeSize = null
+            lines.drop(3).each {
+                if (it.startsWith("COMPILE_TIME")) {
+                    compileTime = it
+                }
+                if (it.startsWith("CODE_SIZE")) {
+                    codeSize = it
+                }
+            }
+            // Create benchmarks report.
+            def properties = [
+                    "cpu": System.getProperty("os.arch"),
+                    "os": System.getProperty("os.name"),
+                    "jdkVersion": System.getProperty("java.version"),
+                    "jdkVendor": System.getProperty("java.vendor"),
+                    "kotlinVersion": kotlinVersion,
+                    "type": "native",
+                    "compilerVersion": konanVersion,
+                    "flags": optionsList,
+                    "benchmarks": "[]"]
+            if (compileTime != null) {
+                def compileBenchmark = MPPTools.toCompileBenchmark(compileTime, status, name)
+                properties += ["compileTime": [compileBenchmark]]
+            }
+            if (codeSize != null) {
+                properties += ["codeSize": MPPTools.toCodeSizeBenchmark(codeSize, status, name)]
+            }
+            def output = MPPTools.createJsonReport(properties)
+            def jsonFile = new File(buildDir, it.replace(".txt", ".json"))
+            jsonFile.write(output)
+            jsonReports.add(jsonFile)
+        }
+        def merged = MPPTools.mergeReports(jsonReports)
+        if (!merged.isEmpty()) {
+            mkdir buildDir.absolutePath
+            new File(buildDir, externalBenchmarksReport).write(merged)
+            uploadBenchmarkResultToArtifactory(externalBenchmarksReport)
+        }
     }
 }
 
 task registerBuild(type: BuildRegister) {
-    def analyzerBinary = MPPTools.findFile("${analyzerTool}${MPPTools.getNativeProgramExtension()}",
-            "${rootBuildDirectory}/${analyzerToolDirectory}")
-    if (analyzerBinary != null) {
-        onlyBranch = project.findProperty('kotlin.register.branch')
-        // Get bundle size.
-        bundleSize = null
-        if (project.findProperty('kotlin.bundleBuild') != null) {
-            def dist = findProperty('org.jetbrains.kotlin.native.home') ?: 'dist'
-            dist = (new File(dist)).isAbsolute() ? dist : "${project.getProjectDir()}/$dist"
-            bundleSize = (new File(dist)).directorySize()
-        }
-        currentBenchmarksReportFile = "${buildDir.absolutePath}/${nativeJson}"
-        analyzer = analyzerBinary
+    onlyBranch = project.findProperty('kotlin.register.branch')
+    def uploadedFile = getUploadedFile(nativeJson)
+    if (uploadedFile != null) {
+        println("Use file from Artifacrory $uploadedFile")
+        fileWithResult = uploadedFile
+    }
+    // Get bundle size.
+    bundleSize = null
+    if (project.findProperty('kotlin.bundleBuild') != null) {
+        def dist = findProperty('kotlin.native.home') ?: 'dist'
+        dist = (new File(dist)).isAbsolute() ? dist : "${project.getProjectDir()}/$dist"
+        bundleSize = (new File(dist)).directorySize()
     }
 }
+
+task registerExternalBuild(type: BuildRegister) {
+    onlyBranch = project.findProperty('kotlin.register.branch')
+    def uploadedFile = getUploadedFile(externalBenchmarksReport)
+    if (uploadedFile != null) {
+        println("Use file from Artifacrory $uploadedFile")
+        fileWithResult = uploadedFile
+    } else {
+        fileWithResult = externalBenchmarksReport
+    }
+
+}
+
+registerExternalBenchmarks.finalizedBy registerExternalBuild
 
 def mergeReports(String fileName) {
     def reports = []
@@ -112,25 +228,26 @@ def mergeReports(String fileName) {
 task mergeNativeReports {
     doLast {
         mergeReports(nativeJson)
-        uploadBenchmarkResultToBintray(nativeJson)
+        uploadBenchmarkResultToArtifactory(nativeJson)
     }
 }
 
 task mergeJvmReports {
     doLast {
         mergeReports(jvmJson)
-        uploadBenchmarkResultToBintray(jvmJson)
+        uploadBenchmarkResultToArtifactory(jvmJson)
     }
 }
 
 subprojects.each {
-    it.getTasksByName('jvmJsonReport', true)[0].finalizedBy mergeJvmReports
-    it.getTasksByName('konanJsonReport', true)[0].finalizedBy mergeNativeReports
+    it.afterEvaluate {
+        it.jvmJsonReport.finalizedBy mergeJvmReports
+        it.konanJsonReport.finalizedBy mergeNativeReports
+    }
 }
 
 task teamCityStat(type:Exec) {
-    def extension = MPPTools.getNativeProgramExtension()
-    def analyzer = MPPTools.findFile("${analyzerTool}${extension}", "${rootBuildDirectory}/${analyzerToolDirectory}")
+    def analyzer = findAnalyzerBinary()
     if (analyzer != null) {
         commandLine "${analyzer}", "-r", "teamcity", "${buildDir.absolutePath}/${nativeJson}"
     } else {
@@ -138,9 +255,9 @@ task teamCityStat(type:Exec) {
     }
 }
 
-task сinterop {
+task cinterop {
     dependsOn 'clean'
-    dependsOn 'сinterop:konanRun'
+    dependsOn 'cinterop:konanRun'
 }
 
 task framework {
@@ -163,6 +280,16 @@ task ring {
     dependsOn 'ring:konanRun'
 }
 
+task numerical {
+    dependsOn 'clean'
+    dependsOn 'numerical:konanRun'
+}
+
+task startup {
+    dependsOn 'clean'
+    dependsOn 'startup:konanRun'
+}
+
 task swiftinterop {
     dependsOn 'clean'
     dependsOn 'swiftinterop:konanRun'
@@ -170,5 +297,10 @@ task swiftinterop {
 
 task videoplayer {
     dependsOn 'clean'
-    dependsOn 'swiftinterop:konanRun'
+    dependsOn 'videoplayer:konanRun'
+}
+
+task KotlinVsSwift {
+    dependsOn 'clean'
+    dependsOn 'KotlinVsSwift:konanRun'
 }
